@@ -7,6 +7,7 @@
 //! - [`db`]: SQLite com migrações por `PRAGMA user_version`.
 //! - [`backup`]: export/import JSON (compatível com o backup do Quitzilla) e CSV.
 
+pub mod analysis;
 pub mod backup;
 pub mod calc;
 pub mod checkin;
@@ -15,6 +16,7 @@ pub mod format;
 pub mod model;
 pub mod pomodoro;
 pub mod presets;
+pub mod tasks;
 pub mod units;
 
 /// Instante atual em epoch ms.

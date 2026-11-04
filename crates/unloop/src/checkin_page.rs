@@ -19,6 +19,7 @@ use crate::{detail, focus, habit_form};
 struct Tabs {
     overview: gtk::Box,
     history: gtk::Box,
+    notes: gtk::Box,
     stats: gtk::Box,
     trophies: gtk::Box,
     motivation: gtk::Box,
@@ -35,6 +36,7 @@ pub fn page(ctx: &Shared, habit_id: i64) -> adw::NavigationPage {
     let tabs = Rc::new(Tabs {
         overview: make("today", "Hoje", "object-select-symbolic"),
         history: make("history", "Histórico", "x-office-calendar-symbolic"),
+        notes: make("notes", "Notas", "accessories-text-editor-symbolic"),
         stats: make("stats", "Estatísticas", "view-list-symbolic"),
         trophies: make("trophies", "Troféus", "starred-symbolic"),
         motivation: make("motivation", "Motivação", "weather-clear-symbolic"),
@@ -82,11 +84,12 @@ fn rebuild(ctx: &Shared, habit_id: i64, tabs: &Tabs, page: &adw::NavigationPage)
     page.set_title(&bundle.habit.name);
     let today = checkin::today();
     let stats = bundle.checkin_stats(today);
-    for b in [&tabs.overview, &tabs.history, &tabs.stats, &tabs.trophies, &tabs.motivation] {
+    for b in [&tabs.overview, &tabs.history, &tabs.notes, &tabs.stats, &tabs.trophies, &tabs.motivation] {
         widgets::clear_box(b);
     }
     overview(ctx, &bundle, &stats, today, &tabs.overview);
     history(ctx, &bundle, today, &tabs.history);
+    crate::notes::tab(ctx, habit_id, &tabs.notes);
     stats_tab(ctx, &bundle, &stats, &tabs.stats);
     trophies(&stats, &tabs.trophies);
     detail::motivation(ctx, &bundle, &tabs.motivation);

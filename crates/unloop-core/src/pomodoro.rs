@@ -116,6 +116,8 @@ impl Settings {
 pub struct FocusRecord {
     pub id: i64,
     pub habit_id: Option<i64>,
+    /// Tarefa trabalhada nesta sessão (opcional).
+    pub task_id: Option<i64>,
     pub started_at: i64,
     pub ended_at: i64,
     pub duration_ms: i64,
@@ -131,6 +133,8 @@ pub struct Timer {
     pub phase: Phase,
     /// Hábito que recebe o crédito do foco.
     pub habit_id: Option<i64>,
+    /// Tarefa em que se está trabalhando (opcional).
+    pub task_id: Option<i64>,
     /// Focos concluídos neste ciclo (define a pausa longa).
     pub focus_count: u32,
     running_since: Option<i64>,
@@ -144,6 +148,7 @@ impl Default for Timer {
             mode: Mode::Pomodoro,
             phase: Phase::Focus,
             habit_id: None,
+            task_id: None,
             focus_count: 0,
             running_since: None,
             accumulated: 0,
@@ -202,7 +207,7 @@ impl Timer {
 
     /// Troca de modo e zera tudo (mantém o hábito vinculado).
     pub fn set_mode(&mut self, mode: Mode) {
-        *self = Timer { mode, habit_id: self.habit_id, ..Timer::default() };
+        *self = Timer { mode, habit_id: self.habit_id, task_id: self.task_id, ..Timer::default() };
     }
 
     fn partial_record(&self, now: i64) -> Option<FocusRecord> {
@@ -210,6 +215,7 @@ impl Timer {
         (self.phase.is_focus() && duration >= MIN_RECORD_MS).then(|| FocusRecord {
             id: 0,
             habit_id: self.habit_id,
+            task_id: self.task_id,
             started_at: self.session_start.unwrap_or(now - duration),
             ended_at: now,
             duration_ms: duration,
@@ -253,6 +259,7 @@ impl Timer {
         let record = finished.is_focus().then(|| FocusRecord {
             id: 0,
             habit_id: self.habit_id,
+            task_id: self.task_id,
             started_at: self.session_start.unwrap_or(now - duration),
             ended_at: now,
             duration_ms: duration,
@@ -272,7 +279,7 @@ impl Timer {
     /// Encerra tudo e volta ao início do foco. Registra o foco feito até aqui (>= 1 min).
     pub fn stop(&mut self, now: i64) -> Option<FocusRecord> {
         let record = self.partial_record(now);
-        *self = Timer { mode: self.mode, habit_id: self.habit_id, ..Timer::default() };
+        *self = Timer { mode: self.mode, habit_id: self.habit_id, task_id: self.task_id, ..Timer::default() };
         record
     }
 }
@@ -624,6 +631,7 @@ mod tests {
         FocusRecord {
             id: 0,
             habit_id: habit,
+            task_id: None,
             started_at: start,
             ended_at: start + minutes * MS_PER_MINUTE,
             duration_ms: minutes * MS_PER_MINUTE,
@@ -787,6 +795,7 @@ mod tests {
         let rec = |start: i64, minutes: i64| FocusRecord {
             id: 0,
             habit_id: None,
+            task_id: None,
             started_at: start,
             ended_at: start + minutes * MIN,
             duration_ms: minutes * MIN,
@@ -826,6 +835,7 @@ mod comparison_tests {
         FocusRecord {
             id: 0,
             habit_id: None,
+            task_id: None,
             started_at: start,
             ended_at: start + minutes * MS_PER_MINUTE,
             duration_ms: minutes * MS_PER_MINUTE,

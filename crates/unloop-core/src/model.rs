@@ -536,3 +536,172 @@ pub struct TextItem {
     pub text: String,
     pub position: i64,
 }
+
+// ------------------------------------------------------------ Notas do hábito
+
+coded_enum!(NoteKind, default = Note, {
+    Note = (0, "NOTE", "Notas"),
+    Trigger = (1, "TRIGGER", "Gatilhos"),
+    Helper = (2, "HELPER", "O que me ajuda"),
+    Insight = (3, "INSIGHT", "Análises"),
+});
+
+impl NoteKind {
+    pub fn emoji(self) -> &'static str {
+        match self {
+            NoteKind::Note => "📝",
+            NoteKind::Trigger => "🔥",
+            NoteKind::Helper => "🛡️",
+            NoteKind::Insight => "🤖",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            NoteKind::Note => "Anotações livres sobre o hábito.",
+            NoteKind::Trigger => "Situações, lugares, horários e emoções que me levam a fazer.",
+            NoteKind::Helper => "O que me ajuda a não fazer (ou a manter o hábito novo).",
+            NoteKind::Insight => "Padrões e conclusões tiradas dos dados (por você ou pelo Claude).",
+        }
+    }
+}
+
+/// Nota ligada a um hábito. `source` = "user" ou "claude".
+#[derive(Clone, Debug, PartialEq)]
+pub struct HabitNote {
+    pub id: i64,
+    pub habit_id: i64,
+    pub kind: NoteKind,
+    pub title: String,
+    /// Texto livre (Markdown).
+    pub body: String,
+    pub tags: Vec<String>,
+    pub source: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl HabitNote {
+    pub fn new(habit_id: i64, kind: NoteKind, title: &str, body: &str) -> Self {
+        HabitNote {
+            id: 0,
+            habit_id,
+            kind,
+            title: title.trim().to_string(),
+            body: body.trim().to_string(),
+            tags: Vec::new(),
+            source: "user".into(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    pub fn by_claude(&self) -> bool {
+        self.source == "claude"
+    }
+}
+
+/// "a, b ,b" → ["a", "b"] (sem vazios nem repetidos, minúsculas).
+pub fn parse_tags(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in text.split(',').map(|t| t.trim().trim_start_matches('#').to_lowercase()) {
+        if !t.is_empty() && !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out
+}
+
+pub fn join_tags(tags: &[String]) -> String {
+    tags.join(", ")
+}
+
+// ------------------------------------------------------------------ Tarefas
+
+coded_enum!(Priority, default = Unset, {
+    Unset = (0, "NONE", "Sem prioridade"),
+    Low = (1, "LOW", "Baixa"),
+    Medium = (2, "MEDIUM", "Média"),
+    High = (3, "HIGH", "Alta"),
+});
+
+impl Priority {
+    pub fn emoji(self) -> &'static str {
+        match self {
+            Priority::Unset => "",
+            Priority::Low => "🔵",
+            Priority::Medium => "🟡",
+            Priority::High => "🔴",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskList {
+    pub id: i64,
+    pub name: String,
+    /// Código em [`COLORS`].
+    pub color: i64,
+    pub position: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Subtask {
+    pub id: i64,
+    pub task_id: i64,
+    pub title: String,
+    pub done: bool,
+    pub position: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Task {
+    pub id: i64,
+    /// `None` = Caixa de entrada.
+    pub list_id: Option<i64>,
+    pub title: String,
+    /// Descrição longa (Markdown).
+    pub description: String,
+    /// Prazo (epoch ms). Sem hora: guardado ao meio-dia local.
+    pub due_at: Option<i64>,
+    pub due_has_time: bool,
+    pub priority: Priority,
+    pub tags: Vec<String>,
+    pub done_at: Option<i64>,
+    pub position: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// Hábito relacionado (opcional).
+    pub habit_id: Option<i64>,
+    pub subtasks: Vec<Subtask>,
+}
+
+impl Task {
+    pub fn new(title: &str) -> Self {
+        Task {
+            id: 0,
+            list_id: None,
+            title: title.trim().to_string(),
+            description: String::new(),
+            due_at: None,
+            due_has_time: false,
+            priority: Priority::Unset,
+            tags: Vec::new(),
+            done_at: None,
+            position: 0,
+            created_at: 0,
+            updated_at: 0,
+            habit_id: None,
+            subtasks: Vec::new(),
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.done_at.is_some()
+    }
+
+    /// (feitas, total) das subtarefas.
+    pub fn subtask_progress(&self) -> (usize, usize) {
+        (self.subtasks.iter().filter(|s| s.done).count(), self.subtasks.len())
+    }
+}

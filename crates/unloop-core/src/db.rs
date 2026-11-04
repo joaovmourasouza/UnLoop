@@ -10,7 +10,7 @@ use crate::calc::HabitBundle;
 use crate::model::*;
 use crate::presets::{goal_presets, DEFAULT_AFFIRMATIONS};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Tabelas de texto simples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +66,10 @@ impl Db {
             if current < 3 {
                 self.conn.execute_batch(MIGRATION_V3)?;
             }
-            // Próximas versões: if current < 4 { self.conn.execute_batch(MIGRATION_V4)?; }
+            if current < 4 {
+                self.conn.execute_batch(MIGRATION_V4)?;
+            }
+            // Próximas versões: if current < 5 { self.conn.execute_batch(MIGRATION_V5)?; }
             self.conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
         })
     }
@@ -312,12 +315,234 @@ impl Db {
         self.set_progress(habit_id, day, if done { 1.0 } else { 0.0 })
     }
 
+    /// Muda quando OUTRA conexão (ex.: a CLI) grava no banco. Usado pelo app para se atualizar.
+    pub fn data_version(&self) -> Result<i64> {
+        self.conn.query_row("PRAGMA data_version", [], |r| r.get(0))
+    }
+
+    // ------------------------------------------------------------------ Notas
+
+    /// Notas (filtro opcional por hábito e tipo), mais recentes primeiro.
+    pub fn notes(&self, habit_id: Option<i64>, kind: Option<NoteKind>) -> Result<Vec<HabitNote>> {
+        let mut st = self.conn.prepare(
+            "SELECT * FROM habit_note WHERE (?1 IS NULL OR habit_id = ?1) AND (?2 IS NULL OR kind = ?2) \
+             ORDER BY updated_at DESC, id DESC",
+        )?;
+        let rows = st.query_map(params![habit_id, kind.map(|k| k.code())], note_from_row)?;
+        rows.collect()
+    }
+
+    pub fn note(&self, id: i64) -> Result<Option<HabitNote>> {
+        self.conn.query_row("SELECT * FROM habit_note WHERE id = ?1", [id], note_from_row).optional()
+    }
+
+    pub fn insert_note(&self, n: &HabitNote) -> Result<i64> {
+        let now = crate::now_ms();
+        self.conn.execute(
+            "INSERT INTO habit_note (habit_id, kind, title, body, tags, source, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                n.habit_id,
+                n.kind.code(),
+                n.title.trim(),
+                n.body.trim(),
+                join_tags(&n.tags),
+                if n.source.trim().is_empty() { "user" } else { n.source.trim() },
+                if n.created_at == 0 { now } else { n.created_at },
+                if n.updated_at == 0 { now } else { n.updated_at },
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_note(&self, n: &HabitNote) -> Result<()> {
+        self.conn.execute(
+            "UPDATE habit_note SET kind = ?1, title = ?2, body = ?3, tags = ?4, updated_at = ?5 WHERE id = ?6",
+            params![n.kind.code(), n.title.trim(), n.body.trim(), join_tags(&n.tags), crate::now_ms(), n.id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_note(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM habit_note WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    // ----------------------------------------------------------------- Listas
+
+    pub fn task_lists(&self) -> Result<Vec<TaskList>> {
+        let mut st = self.conn.prepare("SELECT * FROM task_list ORDER BY position, id")?;
+        let rows = st.query_map([], |r| {
+            Ok(TaskList { id: r.get("id")?, name: r.get("name")?, color: r.get("color")?, position: r.get("position")? })
+        })?;
+        rows.collect()
+    }
+
+    pub fn insert_task_list(&self, name: &str, color: i64) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO task_list (name, color, position) VALUES (?1, ?2, \
+             (SELECT COALESCE(MAX(position), -1) + 1 FROM task_list))",
+            params![name.trim(), color],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn rename_task_list(&self, id: i64, name: &str) -> Result<()> {
+        self.conn.execute("UPDATE task_list SET name = ?1 WHERE id = ?2", params![name.trim(), id])?;
+        Ok(())
+    }
+
+    /// As tarefas da lista vão para a Caixa de entrada.
+    pub fn delete_task_list(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM task_list WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------- Tarefas
+
+    fn subtasks_of(&self, task_id: Option<i64>) -> Result<Vec<Subtask>> {
+        let mut st = self.conn.prepare(
+            "SELECT * FROM subtask WHERE (?1 IS NULL OR task_id = ?1) ORDER BY task_id, position, id",
+        )?;
+        let rows = st.query_map([task_id], |r| {
+            Ok(Subtask {
+                id: r.get("id")?,
+                task_id: r.get("task_id")?,
+                title: r.get("title")?,
+                done: r.get("done")?,
+                position: r.get("position")?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Todas as tarefas (com subtarefas).
+    pub fn tasks(&self) -> Result<Vec<Task>> {
+        let mut st = self.conn.prepare("SELECT * FROM task ORDER BY position, id")?;
+        let mut tasks: Vec<Task> = st.query_map([], task_from_row)?.collect::<Result<_>>()?;
+        let subtasks = self.subtasks_of(None)?;
+        for t in &mut tasks {
+            t.subtasks = subtasks.iter().filter(|s| s.task_id == t.id).cloned().collect();
+        }
+        Ok(tasks)
+    }
+
+    pub fn task(&self, id: i64) -> Result<Option<Task>> {
+        let task = self.conn.query_row("SELECT * FROM task WHERE id = ?1", [id], task_from_row).optional()?;
+        match task {
+            Some(mut t) => {
+                t.subtasks = self.subtasks_of(Some(id))?;
+                Ok(Some(t))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Cria a tarefa (e as subtarefas que ela já tiver).
+    pub fn insert_task(&self, t: &Task) -> Result<i64> {
+        self.transaction(|| {
+            let now = crate::now_ms();
+            self.conn.execute(
+                "INSERT INTO task (list_id, title, description, due_at, due_has_time, priority, tags, done_at, \
+                 position, created_at, updated_at, habit_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, \
+                 (SELECT COALESCE(MAX(position), -1) + 1 FROM task), ?9, ?10, ?11)",
+                params![
+                    t.list_id,
+                    t.title.trim(),
+                    t.description.trim(),
+                    t.due_at,
+                    t.due_has_time && t.due_at.is_some(),
+                    t.priority.code(),
+                    join_tags(&t.tags),
+                    t.done_at,
+                    if t.created_at == 0 { now } else { t.created_at },
+                    now,
+                    t.habit_id,
+                ],
+            )?;
+            let id = self.conn.last_insert_rowid();
+            for s in &t.subtasks {
+                let sid = self.add_subtask(id, &s.title)?;
+                if s.done {
+                    self.set_subtask_done(sid, true)?;
+                }
+            }
+            Ok(id)
+        })
+    }
+
+    /// Atualiza os campos da tarefa (subtarefas têm métodos próprios).
+    pub fn update_task(&self, t: &Task) -> Result<()> {
+        self.conn.execute(
+            "UPDATE task SET list_id = ?1, title = ?2, description = ?3, due_at = ?4, due_has_time = ?5, \
+             priority = ?6, tags = ?7, done_at = ?8, habit_id = ?9, updated_at = ?10 WHERE id = ?11",
+            params![
+                t.list_id,
+                t.title.trim(),
+                t.description.trim(),
+                t.due_at,
+                t.due_has_time && t.due_at.is_some(),
+                t.priority.code(),
+                join_tags(&t.tags),
+                t.done_at,
+                t.habit_id,
+                crate::now_ms(),
+                t.id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_task_done(&self, id: i64, done: bool) -> Result<()> {
+        let now = crate::now_ms();
+        self.conn.execute(
+            "UPDATE task SET done_at = ?1, updated_at = ?2 WHERE id = ?3",
+            params![if done { Some(now) } else { None }, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_task(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM task WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Apaga todas as tarefas e listas (usado ao restaurar um backup).
+    pub fn delete_all_tasks(&self) -> Result<()> {
+        self.conn.execute_batch("DELETE FROM task; DELETE FROM task_list;")
+    }
+
+    pub fn add_subtask(&self, task_id: i64, title: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO subtask (task_id, title, position) VALUES (?1, ?2, \
+             (SELECT COALESCE(MAX(position), -1) + 1 FROM subtask WHERE task_id = ?1))",
+            params![task_id, title.trim()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn set_subtask_done(&self, id: i64, done: bool) -> Result<()> {
+        self.conn.execute("UPDATE subtask SET done = ?1 WHERE id = ?2", params![done, id])?;
+        Ok(())
+    }
+
+    pub fn rename_subtask(&self, id: i64, title: &str) -> Result<()> {
+        self.conn.execute("UPDATE subtask SET title = ?1 WHERE id = ?2", params![title.trim(), id])?;
+        Ok(())
+    }
+
+    pub fn delete_subtask(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM subtask WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------------- Foco
 
     pub fn insert_focus(&self, r: &crate::pomodoro::FocusRecord) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO focus_session (habit_id, started_at, ended_at, duration_ms, mode) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![r.habit_id, r.started_at, r.ended_at, r.duration_ms, r.mode.code()],
+            "INSERT INTO focus_session (habit_id, started_at, ended_at, duration_ms, mode, task_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![r.habit_id, r.started_at, r.ended_at, r.duration_ms, r.mode.code(), r.task_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -325,13 +550,14 @@ impl Db {
     /// Sessões iniciadas a partir de `since_ms`, mais recentes primeiro.
     pub fn focus_sessions_since(&self, since_ms: i64) -> Result<Vec<crate::pomodoro::FocusRecord>> {
         let mut st = self.conn.prepare(
-            "SELECT id, habit_id, started_at, ended_at, duration_ms, mode FROM focus_session \
+            "SELECT id, habit_id, started_at, ended_at, duration_ms, mode, task_id FROM focus_session \
              WHERE started_at >= ?1 ORDER BY started_at DESC",
         )?;
         let rows = st.query_map([since_ms], |r| {
             Ok(crate::pomodoro::FocusRecord {
                 id: r.get(0)?,
                 habit_id: r.get(1)?,
+                task_id: r.get(6)?,
                 started_at: r.get(2)?,
                 ended_at: r.get(3)?,
                 duration_ms: r.get(4)?,
@@ -612,6 +838,39 @@ fn entry_from_row(r: &Row) -> Result<DiaryEntry> {
     })
 }
 
+fn note_from_row(r: &Row) -> Result<HabitNote> {
+    Ok(HabitNote {
+        id: r.get("id")?,
+        habit_id: r.get("habit_id")?,
+        kind: NoteKind::from_code(r.get("kind")?),
+        title: r.get("title")?,
+        body: r.get("body")?,
+        tags: parse_tags(&r.get::<_, String>("tags")?),
+        source: r.get("source")?,
+        created_at: r.get("created_at")?,
+        updated_at: r.get("updated_at")?,
+    })
+}
+
+fn task_from_row(r: &Row) -> Result<Task> {
+    Ok(Task {
+        id: r.get("id")?,
+        list_id: r.get("list_id")?,
+        title: r.get("title")?,
+        description: r.get("description")?,
+        due_at: r.get("due_at")?,
+        due_has_time: r.get("due_has_time")?,
+        priority: Priority::from_code(r.get("priority")?),
+        tags: parse_tags(&r.get::<_, String>("tags")?),
+        done_at: r.get("done_at")?,
+        position: r.get("position")?,
+        created_at: r.get("created_at")?,
+        updated_at: r.get("updated_at")?,
+        habit_id: r.get("habit_id")?,
+        subtasks: Vec::new(),
+    })
+}
+
 fn rule_from_row(r: &Row) -> Result<HabitRule> {
     Ok(HabitRule {
         id: r.get("id")?,
@@ -805,6 +1064,57 @@ CREATE TABLE focus_session (
 CREATE INDEX ix_focus_started ON focus_session (started_at);
 "#;
 
+/// v4: notas dos hábitos, tarefas (listas, subtarefas) e tarefa na sessão de foco.
+const MIGRATION_V4: &str = r#"
+CREATE TABLE habit_note (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    habit_id   INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    kind       INTEGER NOT NULL DEFAULT 0,
+    title      TEXT    NOT NULL DEFAULT '',
+    body       TEXT    NOT NULL DEFAULT '',
+    tags       TEXT    NOT NULL DEFAULT '',
+    source     TEXT    NOT NULL DEFAULT 'user',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX ix_note_habit ON habit_note (habit_id, kind);
+
+CREATE TABLE task_list (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    name     TEXT    NOT NULL,
+    color    INTEGER NOT NULL DEFAULT 1003,
+    position INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE task (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    list_id      INTEGER REFERENCES task_list(id) ON DELETE SET NULL,
+    title        TEXT    NOT NULL,
+    description  TEXT    NOT NULL DEFAULT '',
+    due_at       INTEGER,
+    due_has_time INTEGER NOT NULL DEFAULT 0,
+    priority     INTEGER NOT NULL DEFAULT 0,
+    tags         TEXT    NOT NULL DEFAULT '',
+    done_at      INTEGER,
+    position     INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    habit_id     INTEGER REFERENCES habit(id) ON DELETE SET NULL
+);
+CREATE INDEX ix_task_due ON task (done_at, due_at);
+
+CREATE TABLE subtask (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id  INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+    title    TEXT    NOT NULL,
+    done     INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX ix_subtask_task ON subtask (task_id);
+
+ALTER TABLE focus_session ADD COLUMN task_id INTEGER REFERENCES task(id) ON DELETE SET NULL;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -900,6 +1210,7 @@ mod tests {
         let rec = |start: i64, habit: Option<i64>| FocusRecord {
             id: 0,
             habit_id: habit,
+            task_id: None,
             started_at: start,
             ended_at: start + 1_500_000,
             duration_ms: 1_500_000,
@@ -915,6 +1226,83 @@ mod tests {
         assert_eq!(db.focus_sessions_since(BASE).unwrap()[1].habit_id, None, "sessão fica, sem hábito");
         db.delete_focus(all[0].id).unwrap();
         assert_eq!(db.focus_sessions_since(0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn notas_do_habito() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db.insert_habit(&Habit::new("Refrigerante", BASE), false).unwrap();
+        let mut trigger = HabitNote::new(id, NoteKind::Trigger, "Depois do almoço", "Sono e tédio às 14h.");
+        trigger.tags = parse_tags("Tarde, #trabalho, tarde");
+        let nid = db.insert_note(&trigger).unwrap();
+        let mut insight = HabitNote::new(id, NoteKind::Insight, "Sextas", "Mais recaídas às sextas.");
+        insight.source = "claude".into();
+        db.insert_note(&insight).unwrap();
+
+        let all = db.notes(Some(id), None).unwrap();
+        assert_eq!(all.len(), 2);
+        let triggers = db.notes(Some(id), Some(NoteKind::Trigger)).unwrap();
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].tags, vec!["tarde".to_string(), "trabalho".to_string()]);
+        assert!(db.notes(None, Some(NoteKind::Insight)).unwrap()[0].by_claude());
+
+        let mut edited = db.note(nid).unwrap().unwrap();
+        edited.body = "Sono, tédio e calor às 14h.".into();
+        db.update_note(&edited).unwrap();
+        assert_eq!(db.note(nid).unwrap().unwrap().body, "Sono, tédio e calor às 14h.");
+        db.delete_note(nid).unwrap();
+        assert!(db.note(nid).unwrap().is_none());
+        db.delete_habit(id).unwrap();
+        assert!(db.notes(None, None).unwrap().is_empty(), "notas somem com o hábito");
+    }
+
+    #[test]
+    fn tarefas_listas_e_subtarefas() {
+        let db = Db::open_in_memory().unwrap();
+        let work = db.insert_task_list("Trabalho", 1003).unwrap();
+        let mut t = Task::new("  Relatório mensal ");
+        t.list_id = Some(work);
+        t.description = "Fechar números de janeiro.".into();
+        t.priority = Priority::High;
+        t.tags = parse_tags("trabalho, urgente");
+        t.subtasks = vec![
+            Subtask { id: 0, task_id: 0, title: "Coletar dados".into(), done: true, position: 0 },
+            Subtask { id: 0, task_id: 0, title: "Revisar".into(), done: false, position: 0 },
+        ];
+        let id = db.insert_task(&t).unwrap();
+        let saved = db.task(id).unwrap().unwrap();
+        assert_eq!(saved.title, "Relatório mensal");
+        assert_eq!(saved.priority, Priority::High);
+        assert_eq!(saved.subtask_progress(), (1, 2));
+        assert!(!saved.due_has_time);
+
+        db.set_task_done(id, true).unwrap();
+        assert!(db.task(id).unwrap().unwrap().is_done());
+        db.set_task_done(id, false).unwrap();
+        assert!(!db.task(id).unwrap().unwrap().is_done());
+
+        let sub = db.add_subtask(id, "Enviar").unwrap();
+        db.set_subtask_done(sub, true).unwrap();
+        db.rename_subtask(sub, "Enviar por e-mail").unwrap();
+        assert_eq!(db.tasks().unwrap()[0].subtask_progress(), (2, 3));
+
+        db.delete_task_list(work).unwrap();
+        assert_eq!(db.task(id).unwrap().unwrap().list_id, None, "volta para a Caixa de entrada");
+
+        db.insert_focus(&crate::pomodoro::FocusRecord {
+            id: 0,
+            habit_id: None,
+            task_id: Some(id),
+            started_at: BASE,
+            ended_at: BASE + 1_500_000,
+            duration_ms: 1_500_000,
+            mode: crate::pomodoro::Mode::Pomodoro,
+        })
+        .unwrap();
+        assert_eq!(db.focus_sessions_since(0).unwrap()[0].task_id, Some(id));
+        db.delete_task(id).unwrap();
+        assert_eq!(db.focus_sessions_since(0).unwrap()[0].task_id, None);
+        assert!(db.tasks().unwrap().is_empty());
     }
 
     #[test]

@@ -37,6 +37,8 @@ pub struct Ctx {
     pub timer: RefCell<Timer>,
     pub pomodoro_settings: RefCell<pomodoro::Settings>,
     last_day: Cell<NaiveDate>,
+    /// `PRAGMA data_version` visto por último: muda quando a CLI (ou outro processo) grava.
+    data_version: Cell<i64>,
 }
 
 /// Agenda `changed()` para depois do sinal atual (evita remover o widget que emitiu o sinal).
@@ -155,8 +157,10 @@ impl Ctx {
         let now = unloop_core::now_ms();
         self.process_timer(now);
         let today = checkin::today();
-        if today != self.last_day.get() {
+        let version = self.db.data_version().unwrap_or(0);
+        if today != self.last_day.get() || version != self.data_version.get() {
             self.last_day.set(today);
+            self.data_version.set(version);
             self.changed();
         }
         let list = std::mem::take(&mut *self.tickers.borrow_mut());
@@ -205,6 +209,7 @@ pub fn activate(app: &adw::Application) {
         .build();
 
     let pomodoro_settings = pomodoro::Settings::load(&db);
+    let data_version = db.data_version().unwrap_or(0);
     let ctx: Shared = Rc::new(Ctx {
         db,
         db_path,
@@ -216,6 +221,7 @@ pub fn activate(app: &adw::Application) {
         timer: RefCell::new(Timer::default()),
         pomodoro_settings: RefCell::new(pomodoro_settings),
         last_day: Cell::new(checkin::today()),
+        data_version: Cell::new(data_version),
     });
 
     settings::apply_theme(&ctx.setting("theme", "system"));
@@ -257,6 +263,11 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
     focus.connect_activate(move |_, _| c.nav.push(&crate::focus::page(&c)));
     app.add_action(&focus);
 
+    let tasks = gio::SimpleAction::new("tasks", None);
+    let c = ctx.clone();
+    tasks.connect_activate(move |_, _| c.nav.push(&crate::tasks_page::page(&c)));
+    app.add_action(&tasks);
+
     let quit = gio::SimpleAction::new("quit", None);
     let a = app.clone();
     quit.connect_activate(move |_, _| a.quit());
@@ -265,6 +276,7 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
     app.set_accels_for_action("app.quit", &["<Control>q"]);
     app.set_accels_for_action("app.preferences", &["<Control>comma"]);
     app.set_accels_for_action("app.focus", &["<Control>f"]);
+    app.set_accels_for_action("app.tasks", &["<Control>t"]);
 }
 
 fn show_about(ctx: &Shared) {

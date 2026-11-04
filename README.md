@@ -85,6 +85,52 @@ Botão **🍅 Foco** na tela inicial (Ctrl+F):
 - **Estatísticas**: pomodoros e foco de hoje e do total, dias seguidos com foco, gráfico por semana/mês/ano com navegação entre períodos, distribuição por hábito, melhor horário (foco por hora do dia) e histórico de sessões por dia.
 - Sessões com menos de 1 minuto não são registradas.
 
+## Notas dos hábitos
+
+Aba **Notas** em todo hábito, em quatro grupos: 🔥 **Gatilhos** (o que me leva a fazer), 🛡️ **O que me ajuda**, 📝 **Notas** e 🤖 **Análises**. Cada nota tem título, texto (Markdown), tags e origem: você ou o Claude.
+
+## Tarefas
+
+Botão **✅ Tarefas** (Ctrl+T):
+
+- **Visões**: Hoje (com atrasadas), Próximos 7 dias (por dia), Caixa de entrada, Todas (por lista) e Concluídas.
+- **Tarefa**: título, descrição longa, lista, prazo (com ou sem horário), prioridade, tags, subtarefas e hábito relacionado.
+- **Adição rápida**: campo no topo de cada visão.
+- Concluir com um clique e **🍅 Foco nesta tarefa**, que vincula o Pomodoro à tarefa.
+- As tarefas de hoje também aparecem na tela inicial.
+
+## CLI e Claude Code
+
+`unloop-cli` lê e modifica tudo pela linha de comando, no mesmo banco do app. O app aberto se atualiza sozinho quando a CLI grava.
+
+```bash
+# Flatpak:
+alias unloop-cli='flatpak run --command=unloop-cli io.github.joaovmourasouza.UnLoop'
+# ou compilado: cargo build --release -p unloop-cli  →  target/release/unloop-cli
+
+unloop-cli --help
+unloop-cli --json context                    # retrato completo para análise
+unloop-cli note add "refrigerante" --kind trigger --title "Pós-almoço" --body "Sono e tédio às 14h"
+unloop-cli task add "Relatório" --list Trabalho --due "sex 14:00" --priority high --subtask "Rascunho"
+unloop-cli checkin "leitura" --add 15
+```
+
+Todo comando aceita `--json`. Apagar exige `--yes`. `unloop-cli where` mostra o banco em uso; `--db` ou `$UNLOOP_DB` escolhem outro.
+
+**Para o Claude Code usar**, copie o skill:
+
+```bash
+mkdir -p ~/.claude/skills && cp -r skills/unloop ~/.claude/skills/
+```
+
+Depois é só pedir em linguagem natural, por exemplo:
+- "anota no UnLoop que café depois das 16h me faz querer refrigerante";
+- "analisa meus gatilhos de refrigerante dos últimos 30 dias";
+- "cria as tarefas do projeto X com descrição e prazos";
+- "faz minha revisão da semana".
+
+O skill orienta o Claude a fazer backup antes de mudanças grandes, a só apagar com sua confirmação e a marcar com 🤖 as notas que ele escreve.
+
 ## Migrando do Quitzilla
 
 No celular, faça um backup em arquivo (local). Copie o `.json` para o computador e use **Configurações → Restaurar backup**. Hábitos, diário, metas, recompensas, investimentos, motivos, afirmações, moeda e lema são importados. Os troféus são recalculados.
@@ -93,7 +139,7 @@ No celular, faça um backup em arquivo (local). Copie o `.json` para o computado
 
 > O código ainda **não foi compilado**: foi escrito numa máquina Windows sem Rust e sem GTK. Rode `cargo test -p unloop-core` e `cargo build -p unloop` primeiro e corrija o que o compilador apontar.
 
-Pronto: **hábitos de check diário** (dias programados, meta diária com progresso), **Pomodoro/cronômetro com estatísticas**, hábitos de parar (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), **regras por hábito** (o que é permitido e não reinicia a sequência, e o que não é permitido e reinicia; com sugestões prontas para hábitos comuns e vínculo com o diário), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
+Pronto: **tarefas** (listas, prazos, prioridade, tags, subtarefas), **notas de gatilhos/ajuda/análises**, **CLI `unloop-cli` + skill para o Claude Code**, **hábitos de check diário** (dias programados, meta diária com progresso), **Pomodoro/cronômetro com estatísticas**, hábitos de parar (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), **regras por hábito** (o que é permitido e não reinicia a sequência, e o que não é permitido e reinicia; com sugestões prontas para hábitos comuns e vínculo com o diário), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
 
 Próximos passos:
 - [ ] Onboarding guiado (custo da vida toda, primeira meta, primeira recompensa)
@@ -103,4 +149,6 @@ Próximos passos:
 - [ ] Senha opcional e banco cifrado (SQLCipher)
 - [ ] Manifest offline para o Flathub
 - [ ] Lembrete diário para hábitos de check ainda não feitos
+- [ ] Tarefas recorrentes (todo dia / toda segunda…) e lembretes de prazo
+- [ ] Servidor MCP sobre a CLI (para o Claude Desktop)
 - [ ] Guardar o estado do timer ao fechar o app (hoje uma sessão em andamento se perde ao sair)

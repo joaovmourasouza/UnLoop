@@ -20,6 +20,7 @@ use crate::{entry, habit_form};
 struct Tabs {
     overview: gtk::Box,
     rules: gtk::Box,
+    notes: gtk::Box,
     diary: gtk::Box,
     goals: gtk::Box,
     stats: gtk::Box,
@@ -41,6 +42,7 @@ pub fn page(ctx: &Shared, habit_id: i64) -> adw::NavigationPage {
     let tabs = Rc::new(Tabs {
         overview: make("overview", "Visão geral", "alarm-symbolic"),
         rules: make("rules", "Regras", "object-select-symbolic"),
+        notes: make("notes", "Notas", "accessories-text-editor-symbolic"),
         diary: make("diary", "Diário", "document-edit-symbolic"),
         goals: make("goals", "Metas", "emblem-ok-symbolic"),
         stats: make("stats", "Estatísticas", "view-list-symbolic"),
@@ -150,6 +152,7 @@ fn rebuild(ctx: &Shared, habit_id: i64, tabs: &Rc<Tabs>, page: &adw::NavigationP
     for b in [
         &tabs.overview,
         &tabs.rules,
+        &tabs.notes,
         &tabs.diary,
         &tabs.goals,
         &tabs.stats,
@@ -161,6 +164,7 @@ fn rebuild(ctx: &Shared, habit_id: i64, tabs: &Rc<Tabs>, page: &adw::NavigationP
     }
     overview(ctx, &bundle, &tabs.overview);
     rules_tab(ctx, &bundle, &tabs.rules);
+    crate::notes::tab(ctx, habit_id, &tabs.notes);
     diary(ctx, &bundle, tabs);
     goals(ctx, &bundle, &snap, &tabs.goals);
     stats(ctx, &bundle, &snap, &tabs.stats);

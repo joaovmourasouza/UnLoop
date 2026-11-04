@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/unloop-core", "crates/unloop"]
+members = ["crates/unloop-core", "crates/unloop", "crates/unloop-cli"]
 
 [workspace.package]
 version = "0.1.0"

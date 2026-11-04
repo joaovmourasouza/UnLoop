@@ -61,6 +61,13 @@ pub fn today() -> NaiveDate {
     chrono::Local::now().date_naive()
 }
 
+/// "AAAA-MM-DD HH:MM" no fuso local.
+pub fn local_datetime_string(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default()
+}
+
 /// Data local de um instante (epoch ms).
 pub fn local_date(ms: i64) -> NaiveDate {
     chrono::DateTime::from_timestamp_millis(ms)

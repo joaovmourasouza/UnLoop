@@ -5,7 +5,9 @@ mod entry;
 mod focus;
 mod habit_form;
 mod home;
+mod notes;
 mod settings;
+mod tasks_page;
 mod widgets;
 
 use adw::prelude::*;

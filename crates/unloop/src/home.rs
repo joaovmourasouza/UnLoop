@@ -16,11 +16,16 @@ pub fn page(ctx: &Shared) -> adw::NavigationPage {
     let add = widgets::icon_button("list-add-symbolic", "Novo hábito");
     header.pack_start(&add);
 
+    let tasks_button = gtk::Button::with_label("✅ Tarefas");
+    tasks_button.set_tooltip_text(Some("Tarefas e listas (Ctrl+T)"));
+    header.pack_start(&tasks_button);
+
     let focus_button = gtk::Button::with_label("🍅 Foco");
     focus_button.set_tooltip_text(Some("Pomodoro e estatísticas de foco (Ctrl+F)"));
     header.pack_start(&focus_button);
 
     let menu = gio::Menu::new();
+    menu.append(Some("Tarefas"), Some("app.tasks"));
     menu.append(Some("Foco (Pomodoro)"), Some("app.focus"));
     menu.append(Some("Configurações"), Some("app.preferences"));
     menu.append(Some("Sobre o UnLoop"), Some("app.about"));
@@ -42,6 +47,8 @@ pub fn page(ctx: &Shared) -> adw::NavigationPage {
     add.connect_clicked(move |_| c.nav.push(&habit_form::page(&c, None)));
     let c = ctx.clone();
     focus_button.connect_clicked(move |_| c.nav.push(&focus::page(&c)));
+    let c = ctx.clone();
+    tasks_button.connect_clicked(move |_| c.nav.push(&crate::tasks_page::page(&c)));
 
     // Mostra o tempo do foco em andamento no botão.
     let (c, weak) = (ctx.clone(), focus_button.downgrade());
@@ -95,6 +102,30 @@ fn rebuild(ctx: &Shared, content: &gtk::Box) {
     let motto = ctx.setting("motto", "");
     if !motto.is_empty() {
         content.append(&widgets::label(&motto, &["title-2"]));
+    }
+
+    // Tarefas de hoje (inclui atrasadas), no máximo 5.
+    let all_tasks = ctx.check(ctx.db.tasks()).unwrap_or_default();
+    let lists = ctx.check(ctx.db.task_lists()).unwrap_or_default();
+    let due_today = unloop_core::tasks::filter_view(
+        &all_tasks,
+        unloop_core::tasks::TaskView::Today,
+        checkin::today(),
+        unloop_core::now_ms(),
+    );
+    if !due_today.is_empty() {
+        let summary = format!("{} para hoje (inclui atrasadas)", due_today.len());
+        let group = widgets::group("Tarefas de hoje", Some(summary.as_str()));
+        let open_all = widgets::icon_button("go-next-symbolic", "Abrir tarefas");
+        let c = ctx.clone();
+        open_all.connect_clicked(move |_| c.nav.push(&crate::tasks_page::page(&c)));
+        group.set_header_suffix(Some(&open_all));
+        let list = widgets::boxed_list();
+        for t in due_today.iter().take(5) {
+            list.append(&crate::tasks_page::task_row(ctx, t, &lists, true));
+        }
+        group.add(&list);
+        content.append(&group);
     }
 
     let bundles: Vec<HabitBundle> =

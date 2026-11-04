@@ -215,6 +215,26 @@ fn timer_tab(ctx: &Shared, b: &gtk::Box) {
         row.set_subtitle(&habit.map_or_else(|| "Sem vínculo: o foco fica só no histórico.".to_string(), credit_hint));
     });
     link.add(&combo);
+
+    // Tarefa em que se está trabalhando (aparece nas estatísticas e na CLI).
+    let open_tasks: Vec<unloop_core::model::Task> =
+        ctx.check(ctx.db.tasks()).unwrap_or_default().into_iter().filter(|t| !t.is_done()).collect();
+    let mut task_labels = vec!["Nenhuma".to_string()];
+    task_labels.extend(open_tasks.iter().map(|t| t.title.clone()));
+    let task_refs: Vec<&str> = task_labels.iter().map(String::as_str).collect();
+    let task_combo = adw::ComboRow::builder()
+        .title("Tarefa")
+        .subtitle("Em que você vai trabalhar neste foco")
+        .model(&gtk::StringList::new(&task_refs))
+        .build();
+    let selected_task = timer.task_id.and_then(|id| open_tasks.iter().position(|t| t.id == id)).map_or(0, |i| i + 1);
+    task_combo.set_selected(selected_task as u32);
+    let c = ctx.clone();
+    task_combo.connect_selected_notify(move |row| {
+        let task = (row.selected() as usize).checked_sub(1).and_then(|i| open_tasks.get(i));
+        c.timer.borrow_mut().task_id = task.map(|t| t.id);
+    });
+    link.add(&task_combo);
     b.append(&link);
 
     // Configurações

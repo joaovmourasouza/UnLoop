@@ -92,10 +92,33 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         }
     }
 
+    let mut notes: Vec<Value> = Vec::new();
+    for n in db.notes(None, None)? {
+        notes.push(json!({
+            "id": n.id, "habitId": n.habit_id, "kind": n.kind.legacy(), "title": n.title, "body": n.body,
+            "tags": n.tags, "source": n.source, "createdAt": n.created_at, "updatedAt": n.updated_at,
+        }));
+    }
+    let mut task_lists: Vec<Value> = Vec::new();
+    for l in db.task_lists()? {
+        task_lists.push(json!({ "id": l.id, "name": l.name, "color": l.color, "position": l.position }));
+    }
+    let mut tasks: Vec<Value> = Vec::new();
+    for t in db.tasks()? {
+        let subtasks: Vec<Value> =
+            t.subtasks.iter().map(|st| json!({ "title": st.title, "done": st.done })).collect();
+        tasks.push(json!({
+            "id": t.id, "listId": t.list_id, "title": t.title, "description": t.description,
+            "dueAt": t.due_at, "dueHasTime": t.due_has_time, "priority": t.priority.legacy(),
+            "tags": t.tags, "doneAt": t.done_at, "position": t.position, "createdAt": t.created_at,
+            "habitId": t.habit_id, "subtasks": subtasks,
+        }));
+    }
+
     let mut focus_sessions: Vec<Value> = Vec::new();
     for f in db.focus_sessions_since(0)? {
         focus_sessions.push(json!({
-            "habitId": f.habit_id, "startedAt": f.started_at, "endedAt": f.ended_at,
+            "habitId": f.habit_id, "taskId": f.task_id, "startedAt": f.started_at, "endedAt": f.ended_at,
             "durationMs": f.duration_ms, "mode": f.mode.code(),
         }));
     }
@@ -132,6 +155,9 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         "affirmations": affirmations,
         "rules": rules,
         "checkins": checkins,
+        "notes": notes,
+        "taskLists": task_lists,
+        "tasks": tasks,
         "focusSessions": focus_sessions,
         "settings": {
             "currencyCode": db.setting("currency")?,
@@ -153,6 +179,8 @@ pub struct ImportSummary {
     pub rules: usize,
     pub checkins: usize,
     pub focus_sessions: usize,
+    pub notes: usize,
+    pub tasks: usize,
     pub from_quitzilla: bool,
 }
 
@@ -160,9 +188,11 @@ impl fmt::Display for ImportSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} hábito(s), {} check(s), {} sessão(ões) de foco, {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
+            "{} hábito(s), {} nota(s), {} tarefa(s), {} check(s), {} sessão(ões) de foco, {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
              {} investimento(s), {} motivo(s), {} afirmação(ões)",
             self.habits,
+            self.notes,
+            self.tasks,
             self.checkins,
             self.focus_sessions,
             self.rules,
@@ -194,6 +224,7 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             db.delete_all_habits()?;
             // Sessões de foco não somem junto com os hábitos (ON DELETE SET NULL).
             db.delete_all_focus()?;
+            db.delete_all_tasks()?;
         }
         let mut id_map = std::collections::HashMap::<i64, i64>::new();
         let mut build_ids = std::collections::HashSet::<i64>::new();
@@ -246,6 +277,75 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             summary.checkins += 1;
         }
 
+        // Notas dos hábitos.
+        for n in list(json, "notes") {
+            let Some(hid) = map_habit(n) else { continue };
+            let mut note = HabitNote::new(
+                hid,
+                coded(n.get("kind"), NoteKind::from_code, NoteKind::from_legacy),
+                &text(n, "title"),
+                &text(n, "body"),
+            );
+            note.tags = string_list(n.get("tags"));
+            note.source = match text(n, "source").trim() {
+                "" => "user".to_string(),
+                other => other.to_string(),
+            };
+            note.created_at = int(n, "createdAt").unwrap_or(now);
+            note.updated_at = int(n, "updatedAt").unwrap_or(note.created_at);
+            db.insert_note(&note)?;
+            summary.notes += 1;
+        }
+
+        // Listas e tarefas (antes do foco, para remapear `taskId`).
+        let mut list_map = std::collections::HashMap::<i64, i64>::new();
+        let mut lists_json = list(json, "taskLists");
+        lists_json.sort_by_key(|l| int(l, "position").unwrap_or(0));
+        for l in lists_json {
+            let name = text(l, "name");
+            if name.trim().is_empty() {
+                continue;
+            }
+            let new_id = db.insert_task_list(&name, int(l, "color").unwrap_or(1003))?;
+            list_map.insert(int(l, "id").unwrap_or(0), new_id);
+        }
+        let mut task_map = std::collections::HashMap::<i64, i64>::new();
+        let mut tasks_json = list(json, "tasks");
+        tasks_json.sort_by_key(|t| int(t, "position").unwrap_or(0));
+        for t in tasks_json {
+            let title = text(t, "title");
+            if title.trim().is_empty() {
+                continue;
+            }
+            let mut task = Task::new(&title);
+            task.list_id = int(t, "listId").and_then(|old| list_map.get(&old).copied());
+            task.description = text(t, "description");
+            task.due_at = int(t, "dueAt");
+            task.due_has_time = boolean(t.get("dueHasTime"), false);
+            task.priority = coded(t.get("priority"), Priority::from_code, Priority::from_legacy);
+            task.tags = string_list(t.get("tags"));
+            task.done_at = int(t, "doneAt");
+            task.created_at = int(t, "createdAt").unwrap_or(now);
+            task.habit_id = map_habit(t);
+            if let Some(Value::Array(items)) = t.get("subtasks") {
+                for item in items {
+                    let title = text(item, "title");
+                    if !title.trim().is_empty() {
+                        task.subtasks.push(Subtask {
+                            id: 0,
+                            task_id: 0,
+                            title,
+                            done: boolean(item.get("done"), false),
+                            position: 0,
+                        });
+                    }
+                }
+            }
+            let new_id = db.insert_task(&task)?;
+            task_map.insert(int(t, "id").unwrap_or(0), new_id);
+            summary.tasks += 1;
+        }
+
         for f in list(json, "focusSessions") {
             let duration = int(f, "durationMs").unwrap_or(0);
             let started = int(f, "startedAt").unwrap_or(0);
@@ -255,6 +355,7 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             db.insert_focus(&crate::pomodoro::FocusRecord {
                 id: 0,
                 habit_id: map_habit(f),
+                task_id: int(f, "taskId").and_then(|old| task_map.get(&old).copied()),
                 started_at: started,
                 ended_at: int(f, "endedAt").unwrap_or(started + duration),
                 duration_ms: duration,
@@ -482,6 +583,17 @@ fn boolean(v: Option<&Value>, fallback: bool) -> bool {
     }
 }
 
+/// Lista de textos: aceita array JSON ou texto separado por vírgulas.
+fn string_list(v: Option<&Value>) -> Vec<String> {
+    match v {
+        Some(Value::Array(items)) => {
+            parse_tags(&items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+        }
+        Some(Value::String(s)) => parse_tags(s),
+        _ => Vec::new(),
+    }
+}
+
 fn text(v: &Value, key: &str) -> String {
     match v.get(key) {
         Some(Value::String(s)) => s.clone(),
@@ -667,9 +779,22 @@ mod tests {
         study.target_unit = "min".into();
         let sid = db.insert_habit(&study, true).unwrap();
         db.set_progress(sid, "2025-01-06", 35.0).unwrap();
+        let mut note = HabitNote::new(sid, NoteKind::Trigger, "Cansaço", "Estudar à noite rende pouco.");
+        note.tags = vec!["tarde".into()];
+        db.insert_note(&note).unwrap();
+        let studies = db.insert_task_list("Estudos", 1007).unwrap();
+        let mut task = Task::new("Capítulo 3");
+        task.list_id = Some(studies);
+        task.priority = Priority::High;
+        task.subtasks = vec![
+            Subtask { id: 0, task_id: 0, title: "Ler".into(), done: true, position: 0 },
+            Subtask { id: 0, task_id: 0, title: "Resumir".into(), done: false, position: 0 },
+        ];
+        let task_id = db.insert_task(&task).unwrap();
         db.insert_focus(&crate::pomodoro::FocusRecord {
             id: 0,
             habit_id: Some(sid),
+            task_id: Some(task_id),
             started_at: BASE,
             ended_at: BASE + 1_500_000,
             duration_ms: 1_500_000,
@@ -682,6 +807,19 @@ mod tests {
         let summary = import_backup(&other, &json, true).unwrap();
         assert_eq!(summary.checkins, 3);
         assert_eq!(summary.focus_sessions, 1);
+        // Notas e tarefas também vão e voltam.
+        let notes2 = other.notes(Some(s2.id), None).unwrap();
+        assert_eq!(notes2.len(), 1);
+        assert_eq!(notes2[0].kind, NoteKind::Trigger);
+        assert_eq!(notes2[0].tags, vec!["tarde".to_string()]);
+        let tasks2 = other.tasks().unwrap();
+        assert_eq!(tasks2.len(), 1);
+        assert_eq!(tasks2[0].priority, Priority::High);
+        assert_eq!(tasks2[0].subtask_progress(), (1, 2));
+        assert_eq!(other.task_lists().unwrap()[0].name, "Estudos");
+        assert_eq!(tasks2[0].list_id, Some(other.task_lists().unwrap()[0].id));
+        assert_eq!(other.focus_sessions_since(0).unwrap()[0].task_id, Some(tasks2[0].id));
+
         // Restaurar de novo não duplica o histórico de foco.
         import_backup(&other, &json, true).unwrap();
         assert_eq!(other.focus_sessions_since(0).unwrap().len(), 1);
