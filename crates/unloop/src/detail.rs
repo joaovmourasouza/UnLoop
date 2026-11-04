@@ -95,7 +95,7 @@ pub fn page(ctx: &Shared, habit_id: i64) -> adw::NavigationPage {
     page
 }
 
-fn build_more_menu(ctx: &Shared, habit_id: i64) -> gtk::MenuButton {
+pub(crate) fn build_more_menu(ctx: &Shared, habit_id: i64) -> gtk::MenuButton {
     let popover = gtk::Popover::new();
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let entries: [(&str, i64); 3] = [("Mover para cima", -1), ("Mover para baixo", 1), ("Apagar hábito", 0)];
@@ -937,7 +937,7 @@ fn investment_row(ctx: &Shared, t: &TimeInvestment, time_balance: i64) -> adw::A
 
 // ---------------------------------------------------------------- Motivação
 
-fn motivation(ctx: &Shared, bundle: &HabitBundle, b: &gtk::Box) {
+pub(crate) fn motivation(ctx: &Shared, bundle: &HabitBundle, b: &gtk::Box) {
     let sections: [(&str, &str, TextTable, &Vec<TextItem>); 2] = [
         (
             "Por que eu quero parar",

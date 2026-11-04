@@ -10,7 +10,7 @@ use crate::calc::HabitBundle;
 use crate::model::*;
 use crate::presets::{goal_presets, DEFAULT_AFFIRMATIONS};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Tabelas de texto simples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +63,10 @@ impl Db {
             if current < 2 {
                 self.conn.execute_batch(MIGRATION_V2)?;
             }
-            // Próximas versões: if current < 3 { self.conn.execute_batch(MIGRATION_V3)?; }
+            if current < 3 {
+                self.conn.execute_batch(MIGRATION_V3)?;
+            }
+            // Próximas versões: if current < 4 { self.conn.execute_batch(MIGRATION_V4)?; }
             self.conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
         })
     }
@@ -110,8 +113,9 @@ impl Db {
             self.conn.execute(
                 "INSERT INTO habit (name, icon, color, quit_at, daily_money, daily_minutes, \
                  daily_frequency, habit_since_ms, preferred_metric, counter_type, counter_style, \
-                 position, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, \
-                 (SELECT COALESCE(MAX(position), -1) + 1 FROM habit), ?12)",
+                 position, created_at, kind, schedule_days, daily_target, target_unit) VALUES (?1, ?2, ?3, \
+                 ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, (SELECT COALESCE(MAX(position), -1) + 1 FROM habit), \
+                 ?12, ?13, ?14, ?15, ?16)",
                 params![
                     h.name,
                     h.icon,
@@ -125,11 +129,18 @@ impl Db {
                     h.counter_type.code(),
                     h.counter_style.code(),
                     created,
+                    h.kind.code(),
+                    i64::from(crate::checkin::normalize_mask(i64::from(h.schedule_days))),
+                    h.daily_target.max(0.0),
+                    h.target_unit.trim(),
                 ],
             )?;
             let id = self.conn.last_insert_rowid();
             if seed_defaults {
-                self.seed_preset_goals(id)?;
+                // Metas por duração só fazem sentido para hábitos de parar.
+                if !h.is_build() {
+                    self.seed_preset_goals(id)?;
+                }
                 for text in DEFAULT_AFFIRMATIONS {
                     self.insert_text_item(TextTable::Affirmation, id, text)?;
                 }
@@ -142,7 +153,7 @@ impl Db {
         self.conn.execute(
             "UPDATE habit SET name = ?1, icon = ?2, color = ?3, quit_at = ?4, daily_money = ?5, \
              daily_minutes = ?6, daily_frequency = ?7, preferred_metric = ?8, counter_type = ?9, \
-             counter_style = ?10 WHERE id = ?11",
+             counter_style = ?10, schedule_days = ?11, daily_target = ?12, target_unit = ?13 WHERE id = ?14",
             params![
                 h.name,
                 h.icon,
@@ -154,6 +165,9 @@ impl Db {
                 h.preferred_metric.code(),
                 h.counter_type.code(),
                 h.counter_style.code(),
+                i64::from(crate::checkin::normalize_mask(i64::from(h.schedule_days))),
+                h.daily_target.max(0.0),
+                h.target_unit.trim(),
                 h.id,
             ],
         )?;
@@ -197,6 +211,7 @@ impl Db {
             reasons: self.text_items(TextTable::Reason, id)?,
             affirmations: self.text_items(TextTable::Affirmation, id)?,
             rules: self.rules(id)?,
+            checkins: self.checkins(id)?,
             habit,
         }))
     }
@@ -249,6 +264,85 @@ impl Db {
                 e.id
             ],
         )?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------- Check-ins
+
+    /// Progresso por dia ("AAAA-MM-DD"), em ordem.
+    pub fn checkins(&self, habit_id: i64) -> Result<Vec<DayProgress>> {
+        let mut st = self.conn.prepare("SELECT day, amount FROM checkin WHERE habit_id = ?1 ORDER BY day")?;
+        let rows = st.query_map([habit_id], |r| Ok(DayProgress { day: r.get(0)?, amount: r.get(1)? }))?;
+        rows.collect()
+    }
+
+    /// Define o progresso total de um dia (`<= 0` apaga o registro).
+    pub fn set_progress(&self, habit_id: i64, day: &str, amount: f64) -> Result<()> {
+        if amount > 0.0 && amount.is_finite() {
+            self.conn.execute(
+                "INSERT INTO checkin (habit_id, day, amount, created_at) VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT(habit_id, day) DO UPDATE SET amount = excluded.amount",
+                params![habit_id, day, amount, crate::now_ms()],
+            )?;
+        } else {
+            self.conn
+                .execute("DELETE FROM checkin WHERE habit_id = ?1 AND day = ?2", params![habit_id, day])?;
+        }
+        Ok(())
+    }
+
+    /// Soma `delta` ao progresso do dia (ex.: +10 páginas). Retorna o novo total.
+    pub fn add_progress(&self, habit_id: i64, day: &str, delta: f64) -> Result<f64> {
+        self.transaction(|| {
+            let current: f64 = self
+                .conn
+                .query_row("SELECT amount FROM checkin WHERE habit_id = ?1 AND day = ?2", params![habit_id, day], |r| {
+                    r.get(0)
+                })
+                .optional()?
+                .unwrap_or(0.0);
+            let total = (current + delta).max(0.0);
+            self.set_progress(habit_id, day, total)?;
+            Ok(total)
+        })
+    }
+
+    /// Hábito sem meta: marca (`done = true`) ou desmarca um dia.
+    pub fn set_checkin(&self, habit_id: i64, day: &str, done: bool) -> Result<()> {
+        self.set_progress(habit_id, day, if done { 1.0 } else { 0.0 })
+    }
+
+    // ------------------------------------------------------------------- Foco
+
+    pub fn insert_focus(&self, r: &crate::pomodoro::FocusRecord) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO focus_session (habit_id, started_at, ended_at, duration_ms, mode) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![r.habit_id, r.started_at, r.ended_at, r.duration_ms, r.mode.code()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Sessões iniciadas a partir de `since_ms`, mais recentes primeiro.
+    pub fn focus_sessions_since(&self, since_ms: i64) -> Result<Vec<crate::pomodoro::FocusRecord>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, habit_id, started_at, ended_at, duration_ms, mode FROM focus_session \
+             WHERE started_at >= ?1 ORDER BY started_at DESC",
+        )?;
+        let rows = st.query_map([since_ms], |r| {
+            Ok(crate::pomodoro::FocusRecord {
+                id: r.get(0)?,
+                habit_id: r.get(1)?,
+                started_at: r.get(2)?,
+                ended_at: r.get(3)?,
+                duration_ms: r.get(4)?,
+                mode: crate::pomodoro::Mode::from_code(r.get(5)?),
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_focus(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM focus_session WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -493,6 +587,10 @@ fn habit_from_row(r: &Row) -> Result<Habit> {
         counter_style: CounterStyle::from_code(r.get("counter_style")?),
         position: r.get("position")?,
         created_at: r.get("created_at")?,
+        kind: HabitKind::from_code(r.get("kind")?),
+        schedule_days: crate::checkin::normalize_mask(r.get("schedule_days")?),
+        daily_target: r.get("daily_target")?,
+        target_unit: r.get("target_unit")?,
     })
 }
 
@@ -676,6 +774,32 @@ CREATE INDEX ix_rule_habit ON habit_rule (habit_id, kind);
 ALTER TABLE diary_entry ADD COLUMN rule_id INTEGER REFERENCES habit_rule(id) ON DELETE SET NULL;
 "#;
 
+/// v3: hábitos de check diário (tipo + dias programados) e tabela de check-ins.
+const MIGRATION_V3: &str = r#"
+ALTER TABLE habit ADD COLUMN kind INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE habit ADD COLUMN schedule_days INTEGER NOT NULL DEFAULT 127;
+ALTER TABLE habit ADD COLUMN daily_target REAL NOT NULL DEFAULT 0;
+ALTER TABLE habit ADD COLUMN target_unit TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE checkin (
+    habit_id   INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    day        TEXT    NOT NULL,
+    amount     REAL    NOT NULL DEFAULT 1 CHECK (amount > 0),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (habit_id, day)
+);
+
+CREATE TABLE focus_session (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    habit_id    INTEGER REFERENCES habit(id) ON DELETE SET NULL,
+    started_at  INTEGER NOT NULL,
+    ended_at    INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL CHECK (duration_ms > 0),
+    mode        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX ix_focus_started ON focus_session (started_at);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +838,78 @@ mod tests {
         // Apagar o hábito apaga as regras.
         db.delete_habit(id).unwrap();
         assert!(db.rules(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn habito_de_check_diario() {
+        let db = Db::open_in_memory().unwrap();
+        let mut h = Habit::new("Acordar cedo", BASE);
+        h.kind = HabitKind::Build;
+        h.schedule_days = crate::checkin::WEEKDAYS;
+        let id = db.insert_habit(&h, true).unwrap();
+        let saved = db.habit(id).unwrap().unwrap();
+        assert_eq!(saved.kind, HabitKind::Build);
+        assert_eq!(saved.schedule_days, crate::checkin::WEEKDAYS);
+        assert!(db.goals(id).unwrap().is_empty(), "hábito de check não recebe metas por duração");
+
+        db.set_checkin(id, "2025-01-06", true).unwrap();
+        db.set_checkin(id, "2025-01-06", true).unwrap(); // idempotente
+        db.set_checkin(id, "2025-01-07", true).unwrap();
+        db.set_checkin(id, "2025-01-07", false).unwrap();
+        let days: Vec<String> = db.checkins(id).unwrap().into_iter().map(|p| p.day).collect();
+        assert_eq!(days, vec!["2025-01-06".to_string()]);
+
+        // Meta diária: progresso acumulado.
+        let mut reading = Habit::new("Leitura", BASE);
+        reading.kind = HabitKind::Build;
+        reading.daily_target = 30.0;
+        reading.target_unit = " páginas ".into();
+        let rid = db.insert_habit(&reading, true).unwrap();
+        let saved_reading = db.habit(rid).unwrap().unwrap();
+        assert!(saved_reading.has_target());
+        assert_eq!(saved_reading.target_unit, "páginas");
+        assert_eq!(db.add_progress(rid, "2025-01-06", 10.0).unwrap(), 10.0);
+        assert_eq!(db.add_progress(rid, "2025-01-06", 25.0).unwrap(), 35.0);
+        assert_eq!(db.add_progress(rid, "2025-01-06", -50.0).unwrap(), 0.0);
+        assert!(db.checkins(rid).unwrap().is_empty(), "progresso zerado apaga o registro");
+        db.set_progress(rid, "2025-01-07", 30.0).unwrap();
+        let bundle = db.bundle(rid).unwrap().unwrap();
+        let day7 = crate::checkin::parse_day("2025-01-07").unwrap();
+        assert_eq!(bundle.amount_on(day7), 30.0);
+        assert!(bundle.checkin_stats(day7).done_today);
+
+        let mut edited = saved.clone();
+        edited.schedule_days = 0; // inválido: vira todos os dias
+        db.update_habit(&edited).unwrap();
+        assert_eq!(db.habit(id).unwrap().unwrap().schedule_days, crate::checkin::ALL_DAYS);
+
+        db.delete_habit(id).unwrap();
+        assert!(db.checkins(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sessoes_de_foco() {
+        use crate::pomodoro::{FocusRecord, Mode};
+        let db = Db::open_in_memory().unwrap();
+        let id = db.insert_habit(&Habit::new("Estudar", BASE), false).unwrap();
+        let rec = |start: i64, habit: Option<i64>| FocusRecord {
+            id: 0,
+            habit_id: habit,
+            started_at: start,
+            ended_at: start + 1_500_000,
+            duration_ms: 1_500_000,
+            mode: Mode::Pomodoro,
+        };
+        db.insert_focus(&rec(BASE, Some(id))).unwrap();
+        db.insert_focus(&rec(BASE + MS_PER_DAY, None)).unwrap();
+        let all = db.focus_sessions_since(BASE).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].started_at, BASE + MS_PER_DAY, "mais recentes primeiro");
+        assert_eq!(db.focus_sessions_since(BASE + 1).unwrap().len(), 1);
+        db.delete_habit(id).unwrap();
+        assert_eq!(db.focus_sessions_since(BASE).unwrap()[1].habit_id, None, "sessão fica, sem hábito");
+        db.delete_focus(all[0].id).unwrap();
+        assert_eq!(db.focus_sessions_since(0).unwrap().len(), 1);
     }
 
     #[test]

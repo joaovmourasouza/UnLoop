@@ -192,6 +192,33 @@ pub fn rule_suggestions(icon_code: i64) -> (&'static [&'static str], &'static [&
         .unwrap_or((NO_SUGGESTIONS, NO_SUGGESTIONS))
 }
 
+/// Sugestão de hábito para criar (check diário), com meta opcional.
+#[derive(Debug)]
+pub struct BuildSuggestion {
+    pub icon: i64,
+    /// 0 = só marcar feito.
+    pub target: f64,
+    pub unit: &'static str,
+    pub days: u8,
+}
+
+pub const BUILD_SUGGESTIONS: &[BuildSuggestion] = &[
+    BuildSuggestion { icon: 3001, target: 0.0, unit: "", days: crate::checkin::WEEKDAYS },
+    BuildSuggestion { icon: 3003, target: 30.0, unit: "páginas", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3006, target: 50.0, unit: "min", days: crate::checkin::WEEKDAYS },
+    BuildSuggestion { icon: 3002, target: 30.0, unit: "min", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3004, target: 10.0, unit: "min", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3005, target: 8.0, unit: "copos", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3013, target: 30.0, unit: "min", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3011, target: 15.0, unit: "min", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3009, target: 10.0, unit: "min", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3008, target: 0.0, unit: "", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3007, target: 0.0, unit: "", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3012, target: 0.0, unit: "", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3010, target: 0.0, unit: "", days: crate::checkin::ALL_DAYS },
+    BuildSuggestion { icon: 3014, target: 0.0, unit: "", days: crate::checkin::WEEKEND },
+];
+
 pub const DEFAULT_AFFIRMATIONS: &[&str] = &[
     "Eu estou no controle das minhas escolhas.",
     "Cada dia limpo é uma vitória que ninguém tira de mim.",

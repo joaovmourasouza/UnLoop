@@ -66,6 +66,25 @@ Cada hábito tem duas listas, na aba **Regras**:
 
 Ao registrar algo no diário, escolha a regra relacionada e o app decide sozinho se o contador reinicia. Sem regra, vale a escolha manual ("Foi uma recaída"). A aba mostra quantas vezes cada regra foi registrada e oferece sugestões para os hábitos mais comuns.
 
+## Dois tipos de hábito
+
+- **Parar um hábito (contador)**: conta o tempo desde a última recaída. Tem regras, diário, metas por duração, economia de dinheiro e tempo, recompensas e troféus.
+- **Criar um hábito (check diário)**: você marca todo dia que fez. Ex.: acordar cedo.
+  - **Dias programados**: só esses dias contam (ex.: acordar cedo de segunda a sexta). Dias fora do programa não quebram a sequência; marcar neles conta como bônus.
+  - **Meta diária opcional**: ex.: leitura de 30 páginas ou estudo de 50 min. Você registra o progresso ao longo do dia (+10, +20…) e o dia só conta quando bate a meta.
+  - Hoje nunca quebra a sequência enquanto o dia não acabou.
+  - Check direto na tela inicial, calendário de 12 semanas para corrigir dias passados, sequência atual e melhor sequência, taxa de conclusão e troféus por dias seguidos.
+
+## Foco (Pomodoro)
+
+Botão **🍅 Foco** na tela inicial (Ctrl+F):
+
+- **Pomodoro** (foco, pausa curta e pausa longa a cada N focos, com durações configuráveis e início automático opcional) ou **cronômetro**.
+- O timer continua rodando enquanto você navega. Ao fim de cada fase há notificação do sistema.
+- **Vínculo com hábito**: o foco concluído é creditado num hábito de check. Com meta em minutos (ex.: "Estudar 50 min"), os minutos somam no progresso do dia; sem meta, a sessão marca o dia como feito.
+- **Estatísticas**: pomodoros e foco de hoje e do total, dias seguidos com foco, gráfico por semana/mês/ano com navegação entre períodos, distribuição por hábito, melhor horário (foco por hora do dia) e histórico de sessões por dia.
+- Sessões com menos de 1 minuto não são registradas.
+
 ## Migrando do Quitzilla
 
 No celular, faça um backup em arquivo (local). Copie o `.json` para o computador e use **Configurações → Restaurar backup**. Hábitos, diário, metas, recompensas, investimentos, motivos, afirmações, moeda e lema são importados. Os troféus são recalculados.
@@ -74,7 +93,7 @@ No celular, faça um backup em arquivo (local). Copie o `.json` para o computado
 
 > O código ainda **não foi compilado**: foi escrito numa máquina Windows sem Rust e sem GTK. Rode `cargo test -p unloop-core` e `cargo build -p unloop` primeiro e corrija o que o compilador apontar.
 
-Pronto: hábitos (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), **regras por hábito** (o que é permitido e não reinicia a sequência, e o que não é permitido e reinicia; com sugestões prontas para hábitos comuns e vínculo com o diário), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
+Pronto: **hábitos de check diário** (dias programados, meta diária com progresso), **Pomodoro/cronômetro com estatísticas**, hábitos de parar (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), **regras por hábito** (o que é permitido e não reinicia a sequência, e o que não é permitido e reinicia; com sugestões prontas para hábitos comuns e vínculo com o diário), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
 
 Próximos passos:
 - [ ] Onboarding guiado (custo da vida toda, primeira meta, primeira recompensa)
@@ -83,3 +102,5 @@ Próximos passos:
 - [ ] Celebração ao alcançar uma meta
 - [ ] Senha opcional e banco cifrado (SQLCipher)
 - [ ] Manifest offline para o Flathub
+- [ ] Lembrete diário para hábitos de check ainda não feitos
+- [ ] Guardar o estado do timer ao fechar o app (hoje uma sessão em andamento se perde ao sair)

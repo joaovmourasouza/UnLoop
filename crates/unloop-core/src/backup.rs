@@ -41,8 +41,12 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
     let (mut entries, mut goals, mut rewards, mut investments, mut reasons, mut affirmations) =
         (vec![], vec![], vec![], vec![], vec![], vec![]);
     let mut rules = vec![];
+    let mut checkins = vec![];
 
     for h in &habits {
+        for p in db.checkins(h.id)? {
+            checkins.push(json!({ "habitId": h.id, "day": p.day, "amount": p.amount }));
+        }
         for r in db.rules(h.id)? {
             rules.push(json!({
                 "id": r.id, "habitId": h.id, "kind": r.kind.legacy(),
@@ -88,6 +92,14 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         }
     }
 
+    let mut focus_sessions: Vec<Value> = Vec::new();
+    for f in db.focus_sessions_since(0)? {
+        focus_sessions.push(json!({
+            "habitId": f.habit_id, "startedAt": f.started_at, "endedAt": f.ended_at,
+            "durationMs": f.duration_ms, "mode": f.mode.code(),
+        }));
+    }
+
     let habits_json: Vec<Value> = habits
         .iter()
         .map(|h| {
@@ -100,6 +112,8 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
                 "preferredSpendingType": h.preferred_metric.legacy(),
                 "counterType": h.counter_type.legacy(), "counterStyle": h.counter_style.legacy(),
                 "habitSinceMs": h.habit_since_ms, "createdAt": h.created_at,
+                "kind": h.kind.legacy(), "scheduleDays": h.schedule_days,
+                "dailyTarget": h.daily_target, "targetUnit": h.target_unit,
             })
         })
         .collect();
@@ -117,6 +131,8 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         "reasons": reasons,
         "affirmations": affirmations,
         "rules": rules,
+        "checkins": checkins,
+        "focusSessions": focus_sessions,
         "settings": {
             "currencyCode": db.setting("currency")?,
             "mainTitle": db.setting("motto")?,
@@ -135,6 +151,8 @@ pub struct ImportSummary {
     pub reasons: usize,
     pub affirmations: usize,
     pub rules: usize,
+    pub checkins: usize,
+    pub focus_sessions: usize,
     pub from_quitzilla: bool,
 }
 
@@ -142,9 +160,11 @@ impl fmt::Display for ImportSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} hábito(s), {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
+            "{} hábito(s), {} check(s), {} sessão(ões) de foco, {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
              {} investimento(s), {} motivo(s), {} afirmação(ões)",
             self.habits,
+            self.checkins,
+            self.focus_sessions,
             self.rules,
             self.entries,
             self.goals,
@@ -174,6 +194,7 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             db.delete_all_habits()?;
         }
         let mut id_map = std::collections::HashMap::<i64, i64>::new();
+        let mut build_ids = std::collections::HashSet::<i64>::new();
 
         for m in &habits {
             let name = text(m, "name");
@@ -196,12 +217,49 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             h.counter_type = coded(m.get("counterType"), CounterType::from_code, CounterType::from_legacy);
             h.counter_style = coded(m.get("counterStyle"), CounterStyle::from_code, CounterStyle::from_legacy);
             h.created_at = int(m, "createdAt").unwrap_or(now);
+            h.kind = coded(m.get("kind"), HabitKind::from_code, HabitKind::from_legacy);
+            h.schedule_days = crate::checkin::normalize_mask(int(m, "scheduleDays").unwrap_or(127));
+            h.daily_target = non_neg(m.get("dailyTarget"));
+            h.target_unit = text(m, "targetUnit").trim().to_string();
 
             let new_id = db.insert_habit(&h, false)?;
             id_map.insert(int(m, "id").unwrap_or(0), new_id);
+            if h.is_build() {
+                build_ids.insert(new_id);
+            }
             summary.habits += 1;
         }
         let map_habit = |v: &Value| int(v, "habitId").and_then(|old| id_map.get(&old).copied());
+
+        for c in list(json, "checkins") {
+            let Some(hid) = map_habit(c) else { continue };
+            let Some(day) = c.get("day").and_then(Value::as_str).and_then(crate::checkin::parse_day) else {
+                continue;
+            };
+            let amount = match c.get("amount") {
+                Some(v) if !v.is_null() => non_neg(Some(v)),
+                _ => 1.0,
+            };
+            db.set_progress(hid, &crate::checkin::day_key(day), amount)?;
+            summary.checkins += 1;
+        }
+
+        for f in list(json, "focusSessions") {
+            let duration = int(f, "durationMs").unwrap_or(0);
+            let started = int(f, "startedAt").unwrap_or(0);
+            if duration <= 0 || started <= 0 {
+                continue;
+            }
+            db.insert_focus(&crate::pomodoro::FocusRecord {
+                id: 0,
+                habit_id: map_habit(f),
+                started_at: started,
+                ended_at: int(f, "endedAt").unwrap_or(started + duration),
+                duration_ms: duration,
+                mode: crate::pomodoro::Mode::from_code(int(f, "mode").unwrap_or(0)),
+            })?;
+            summary.focus_sessions += 1;
+        }
 
         // Regras antes do diário, para remapear `ruleId`.
         let mut rule_map = std::collections::HashMap::<i64, (i64, RuleKind)>::new();
@@ -270,7 +328,7 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             summary.goals += 1;
         }
         for hid in id_map.values() {
-            if !with_goals.contains(hid) {
+            if !with_goals.contains(hid) && !build_ids.contains(hid) {
                 db.seed_preset_goals(*hid)?;
             }
         }
@@ -589,6 +647,52 @@ mod tests {
         assert_eq!(db.investments(h.id).unwrap()[0].invested_ms, 3_600_000);
         assert!(!db.rewards(h.id).unwrap()[0].is_purchased());
         assert_eq!(db.setting("motto").unwrap().as_deref(), Some("Um dia de cada vez"));
+    }
+
+    #[test]
+    fn habito_de_check_diario_no_backup() {
+        let db = Db::open_in_memory().unwrap();
+        let mut h = Habit::new("Acordar cedo", BASE);
+        h.kind = HabitKind::Build;
+        h.icon = 3001;
+        h.schedule_days = crate::checkin::WEEKDAYS;
+        let id = db.insert_habit(&h, true).unwrap();
+        db.set_checkin(id, "2025-01-06", true).unwrap();
+        db.set_checkin(id, "2025-01-07", true).unwrap();
+        let mut study = Habit::new("Estudar", BASE);
+        study.kind = HabitKind::Build;
+        study.daily_target = 50.0;
+        study.target_unit = "min".into();
+        let sid = db.insert_habit(&study, true).unwrap();
+        db.set_progress(sid, "2025-01-06", 35.0).unwrap();
+        db.insert_focus(&crate::pomodoro::FocusRecord {
+            id: 0,
+            habit_id: Some(sid),
+            started_at: BASE,
+            ended_at: BASE + 1_500_000,
+            duration_ms: 1_500_000,
+            mode: crate::pomodoro::Mode::Pomodoro,
+        })
+        .unwrap();
+
+        let json = export_backup(&db, "teste").unwrap();
+        let other = Db::open_in_memory().unwrap();
+        let summary = import_backup(&other, &json, true).unwrap();
+        assert_eq!(summary.checkins, 3);
+        assert_eq!(summary.focus_sessions, 1);
+        let mut habits2 = other.habits().unwrap();
+        let s2 = habits2.remove(1);
+        assert_eq!(s2.daily_target, 50.0);
+        assert_eq!(s2.target_unit, "min");
+        assert_eq!(other.checkins(s2.id).unwrap()[0].amount, 35.0);
+        assert_eq!(other.focus_sessions_since(0).unwrap()[0].habit_id, Some(s2.id));
+        let h2 = habits2.remove(0);
+        assert_eq!(h2.kind, HabitKind::Build);
+        assert_eq!(h2.icon, 3001);
+        assert_eq!(h2.schedule_days, crate::checkin::WEEKDAYS);
+        let days: Vec<String> = other.checkins(h2.id).unwrap().into_iter().map(|p| p.day).collect();
+        assert_eq!(days, vec!["2025-01-06".to_string(), "2025-01-07".to_string()]);
+        assert!(other.goals(h2.id).unwrap().is_empty());
     }
 
     #[test]

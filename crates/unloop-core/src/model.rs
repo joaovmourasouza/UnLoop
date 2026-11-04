@@ -91,6 +91,12 @@ coded_enum!(Trophy, default = DecisionMade, {
     Day3650 = (12, "DAY_3650", "10 anos"),
 });
 
+// Tipo do hábito: parar (contador desde a última recaída) ou criar (check diário).
+coded_enum!(HabitKind, default = Quit, {
+    Quit = (0, "QUIT", "Parar um hábito (contador)"),
+    Build = (1, "BUILD", "Criar um hábito (check diário)"),
+});
+
 // Regras do hábito: o que é permitido (não reinicia) e o que não é (reinicia).
 coded_enum!(RuleKind, default = Forbidden, {
     Allowed = (0, "ALLOWED", "Permitido"),
@@ -205,6 +211,21 @@ pub const ICONS: &[IconInfo] = &[
     ic(2057, "VAPING", "💨", "Vape"),
     ic(2058, "SNUS", "👄", "Tabaco de mascar"),
     ic(2059, "SELF_HARM", "🩹", "Autolesão"),
+    // Hábitos para criar (códigos próprios do UnLoop).
+    ic(3001, "WAKE_EARLY", "🌅", "Acordar cedo"),
+    ic(3002, "EXERCISE", "🏃", "Exercício"),
+    ic(3003, "READING", "📖", "Leitura"),
+    ic(3004, "MEDITATION", "🧘", "Meditação"),
+    ic(3005, "WATER", "💧", "Beber água"),
+    ic(3006, "STUDY", "🎓", "Estudar"),
+    ic(3007, "JOURNALING", "✍️", "Escrever no diário"),
+    ic(3008, "SLEEP_EARLY", "🛌", "Dormir cedo"),
+    ic(3009, "STRETCHING", "🤸", "Alongamento"),
+    ic(3010, "HEALTHY_FOOD", "🥗", "Comer bem"),
+    ic(3011, "LANGUAGE", "🗣️", "Praticar idioma"),
+    ic(3012, "GRATITUDE", "🙏", "Gratidão"),
+    ic(3013, "WALK", "🚶", "Caminhada"),
+    ic(3014, "CLEANING", "🧹", "Organizar a casa"),
 ];
 
 pub fn icon(code: i64) -> &'static IconInfo {
@@ -302,6 +323,14 @@ pub struct Habit {
     pub counter_style: CounterStyle,
     pub position: i64,
     pub created_at: i64,
+    /// Parar (contador) ou criar (check diário).
+    pub kind: HabitKind,
+    /// Dias programados para hábitos de check (bit 0 = segunda … bit 6 = domingo).
+    pub schedule_days: u8,
+    /// Meta diária de hábitos de check (ex.: 30 páginas). 0 = só marcar feito.
+    pub daily_target: f64,
+    /// Unidade da meta diária (ex.: "páginas", "min").
+    pub target_unit: String,
 }
 
 impl Habit {
@@ -321,7 +350,20 @@ impl Habit {
             counter_style: CounterStyle::Full,
             position: 0,
             created_at: 0,
+            kind: HabitKind::Quit,
+            schedule_days: crate::checkin::ALL_DAYS,
+            daily_target: 0.0,
+            target_unit: String::new(),
         }
+    }
+
+    /// Hábito de check com meta diária (só conta o dia ao atingir a meta).
+    pub fn has_target(&self) -> bool {
+        self.is_build() && self.daily_target > 0.0
+    }
+
+    pub fn is_build(&self) -> bool {
+        self.kind == HabitKind::Build
     }
 
     pub fn icon_info(&self) -> &'static IconInfo {
@@ -476,6 +518,14 @@ pub struct HabitRule {
     pub kind: RuleKind,
     pub text: String,
     pub position: i64,
+}
+
+/// Progresso de um dia num hábito de check. Sem meta, `amount` = 1 (feito).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DayProgress {
+    /// "AAAA-MM-DD" (data local)
+    pub day: String,
+    pub amount: f64,
 }
 
 /// Motivo para parar ou afirmação.

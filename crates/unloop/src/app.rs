@@ -1,13 +1,15 @@
 //! Estado compartilhado da aplicação, janela principal, ações e relógio.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
+use unloop_core::checkin::{self, NaiveDate};
 use unloop_core::db::Db;
 use unloop_core::model::COLORS;
+use unloop_core::pomodoro::{self, Credit, FocusRecord, Phase, Timer};
 
 use crate::{home, settings, APP_ID, VERSION};
 
@@ -31,9 +33,80 @@ pub struct Ctx {
     toasts: adw::ToastOverlay,
     refreshers: RefCell<Vec<Refresher>>,
     tickers: RefCell<Vec<Ticker>>,
+    /// Timer de foco (continua rodando enquanto se navega pelo app).
+    pub timer: RefCell<Timer>,
+    pub pomodoro_settings: RefCell<pomodoro::Settings>,
+    last_day: Cell<NaiveDate>,
+}
+
+/// Agenda `changed()` para depois do sinal atual (evita remover o widget que emitiu o sinal).
+pub fn changed_later(ctx: &Shared) {
+    let c = ctx.clone();
+    glib::idle_add_local_once(move || c.changed());
 }
 
 impl Ctx {
+    /// Salva a sessão de foco e credita o hábito vinculado (minutos ou check do dia).
+    pub fn save_focus(&self, record: &FocusRecord) {
+        let mut r = record.clone();
+        let habit = r.habit_id.and_then(|id| self.db.habit(id).ok().flatten());
+        if habit.is_none() {
+            r.habit_id = None;
+        }
+        if self.check(self.db.insert_focus(&r)).is_none() {
+            return;
+        }
+        let Some(h) = habit else { return };
+        let day = checkin::day_key(checkin::local_date(r.ended_at));
+        match pomodoro::focus_credit(&h, r.duration_ms) {
+            Credit::AddProgress(amount) => {
+                if let Some(total) = self.check(self.db.add_progress(h.id, &day, amount)) {
+                    self.toast(&format!(
+                        "{}: +{} {} (hoje: {})",
+                        h.name,
+                        unloop_core::format::format_number(amount),
+                        h.target_unit,
+                        unloop_core::format::format_number(total)
+                    ));
+                }
+            }
+            Credit::Check => {
+                if self.check(self.db.set_checkin(h.id, &day, true)).is_some() {
+                    self.toast(&format!("{}: marcado como feito hoje", h.name));
+                }
+            }
+            Credit::None => {}
+        }
+    }
+
+    fn notify_phase_end(&self, finished: Phase) {
+        let next = self.timer.borrow().phase;
+        let (title, body) = if finished.is_focus() {
+            ("Foco concluído 🍅", format!("Bom trabalho! Agora: {}.", next.label().to_lowercase()))
+        } else {
+            ("Pausa terminada", "Hora de voltar ao foco.".to_string())
+        };
+        if let Some(app) = self.window.application() {
+            let n = gio::Notification::new(title);
+            n.set_body(Some(&body));
+            app.send_notification(Some("unloop-focus"), &n);
+        }
+        if let Some(display) = gdk::Display::default() {
+            display.beep();
+        }
+    }
+
+    fn process_timer(&self, now: i64) {
+        let settings = self.pomodoro_settings.borrow().clone();
+        let result = self.timer.borrow_mut().tick(now, &settings);
+        if let Some((finished, record)) = result {
+            if let Some(r) = record {
+                self.save_focus(&r);
+            }
+            self.notify_phase_end(finished);
+            self.changed();
+        }
+    }
     pub fn toast(&self, message: &str) {
         // Títulos de toast são Pango markup: escapa caminhos e mensagens de erro.
         self.toasts.add_toast(adw::Toast::new(&glib::markup_escape_text(message)));
@@ -80,6 +153,12 @@ impl Ctx {
 
     fn tick(&self) {
         let now = unloop_core::now_ms();
+        self.process_timer(now);
+        let today = checkin::today();
+        if today != self.last_day.get() {
+            self.last_day.set(today);
+            self.changed();
+        }
         let list = std::mem::take(&mut *self.tickers.borrow_mut());
         let mut keep: Vec<Ticker> = list.into_iter().filter(|f| f(now)).collect();
         let mut current = self.tickers.borrow_mut();
@@ -125,6 +204,7 @@ pub fn activate(app: &adw::Application) {
         .content(&toasts)
         .build();
 
+    let pomodoro_settings = pomodoro::Settings::load(&db);
     let ctx: Shared = Rc::new(Ctx {
         db,
         db_path,
@@ -133,6 +213,9 @@ pub fn activate(app: &adw::Application) {
         toasts,
         refreshers: RefCell::new(Vec::new()),
         tickers: RefCell::new(Vec::new()),
+        timer: RefCell::new(Timer::default()),
+        pomodoro_settings: RefCell::new(pomodoro_settings),
+        last_day: Cell::new(checkin::today()),
     });
 
     settings::apply_theme(&ctx.setting("theme", "system"));
@@ -169,6 +252,11 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
     about.connect_activate(move |_, _| show_about(&c));
     app.add_action(&about);
 
+    let focus = gio::SimpleAction::new("focus", None);
+    let c = ctx.clone();
+    focus.connect_activate(move |_, _| c.nav.push(&crate::focus::page(&c)));
+    app.add_action(&focus);
+
     let quit = gio::SimpleAction::new("quit", None);
     let a = app.clone();
     quit.connect_activate(move |_, _| a.quit());
@@ -176,6 +264,7 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
 
     app.set_accels_for_action("app.quit", &["<Control>q"]);
     app.set_accels_for_action("app.preferences", &["<Control>comma"]);
+    app.set_accels_for_action("app.focus", &["<Control>f"]);
 }
 
 fn show_about(ctx: &Shared) {
@@ -206,6 +295,12 @@ fn load_css() {
         .trophy .emoji { font-size: 40px; }
         .trophy.locked { opacity: 0.45; }
         .affirmation { font-style: italic; font-size: 17px; }
+        .timer { font-size: 64px; font-weight: 800; font-feature-settings: \"tnum\"; }
+        .day-cell { min-width: 38px; min-height: 34px; padding: 0; }
+        .day-cell.off { opacity: 0.5; }
+        .day-cell.partial { box-shadow: inset 0 -3px 0 alpha(@accent_bg_color, 0.7); }
+        .week-day { min-width: 40px; }
+        .week-day .mark { font-size: 20px; }
         progressbar.thick trough, progressbar.thick progress { min-height: 10px; border-radius: 5px; }
         ",
     );

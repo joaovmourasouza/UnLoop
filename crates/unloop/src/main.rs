@@ -1,6 +1,8 @@
 mod app;
+mod checkin_page;
 mod detail;
 mod entry;
+mod focus;
 mod habit_form;
 mod home;
 mod settings;

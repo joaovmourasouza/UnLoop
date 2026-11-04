@@ -222,6 +222,8 @@ pub struct HabitBundle {
     pub reasons: Vec<crate::model::TextItem>,
     pub affirmations: Vec<crate::model::TextItem>,
     pub rules: Vec<HabitRule>,
+    /// Progresso por dia de hábitos de check diário.
+    pub checkins: Vec<crate::model::DayProgress>,
 }
 
 /// Tudo que a UI precisa sobre um hábito num instante.
@@ -266,6 +268,21 @@ impl HabitBundle {
     /// Quantas entradas do diário citam a regra.
     pub fn rule_usage(&self, rule_id: i64) -> usize {
         self.entries.iter().filter(|e| e.rule_id == Some(rule_id)).count()
+    }
+
+    /// Estatísticas de check diário até `today`.
+    pub fn checkin_stats(&self, today: crate::checkin::NaiveDate) -> crate::checkin::CheckinStats {
+        crate::checkin::checkin_stats(
+            crate::checkin::local_date(self.habit.quit_at),
+            self.habit.schedule_days,
+            &crate::checkin::done_days(&self.checkins, self.habit.daily_target),
+            today,
+        )
+    }
+
+    /// Progresso registrado num dia.
+    pub fn amount_on(&self, day: crate::checkin::NaiveDate) -> f64 {
+        crate::checkin::amount_on(&self.checkins, day)
     }
 
     pub fn snapshot(&self, now: i64) -> HabitSnapshot {
@@ -424,6 +441,7 @@ mod tests {
             reasons: vec![],
             affirmations: vec![],
             rules: vec![],
+            checkins: vec![],
         };
         let s = bundle.snapshot(day(15.0));
         assert_eq!(s.start, day(12.0));

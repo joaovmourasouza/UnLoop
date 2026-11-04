@@ -9,9 +9,11 @@
 
 pub mod backup;
 pub mod calc;
+pub mod checkin;
 pub mod db;
 pub mod format;
 pub mod model;
+pub mod pomodoro;
 pub mod presets;
 pub mod units;
 

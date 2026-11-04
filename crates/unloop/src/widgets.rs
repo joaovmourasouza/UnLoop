@@ -127,12 +127,52 @@ pub fn fmt_datetime(ms: i64) -> String {
     fmt_local(ms, "%d/%m/%Y às %H:%M")
 }
 
+pub fn fmt_time(ms: i64) -> String {
+    fmt_local(ms, "%H:%M")
+}
+
 pub fn file_stamp() -> String {
     glib::DateTime::now_local()
         .ok()
         .and_then(|d| d.format("%Y%m%d-%H%M").ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "backup".into())
+}
+
+/// "mm:ss" (minutos podem passar de 60 no cronômetro).
+pub fn clock(ms: i64) -> String {
+    let secs = ms.max(0) / 1000;
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+/// Gráfico de barras verticais simples. `values` = (rótulo, valor em ms).
+pub fn bar_chart(values: &[(String, i64)], color_class: Option<&str>) -> gtk::Box {
+    let chart = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    chart.set_homogeneous(true);
+    chart.set_height_request(150);
+    let max = values.iter().map(|v| v.1).max().unwrap_or(0).max(1);
+    let step = if values.len() > 12 { (values.len() + 7) / 8 } else { 1 };
+    for (i, (label, value)) in values.iter().enumerate() {
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let bar = gtk::ProgressBar::new();
+        bar.set_orientation(gtk::Orientation::Vertical);
+        bar.set_inverted(true);
+        bar.set_vexpand(true);
+        bar.set_halign(gtk::Align::Center);
+        bar.set_fraction(*value as f64 / max as f64);
+        bar.add_css_class("thick");
+        if let Some(c) = color_class {
+            bar.add_css_class(c);
+        }
+        column.set_tooltip_text(Some(&format!("{label}: {}", format_compact(*value))));
+        column.append(&bar);
+        let caption = gtk::Label::new(Some(if i % step == 0 { label.as_str() } else { "" }));
+        caption.add_css_class("caption");
+        caption.add_css_class("dim-label");
+        column.append(&caption);
+        chart.append(&column);
+    }
+    chart
 }
 
 // --------------------------------------------------------- Textos do contador
@@ -274,6 +314,39 @@ pub fn ask_name_number(
             return;
         }
         on_ok(name, value);
+    });
+    d.present();
+}
+
+/// Pede um número (aceita zero).
+pub fn ask_number(
+    ctx: &Shared,
+    heading: &str,
+    body: &str,
+    initial: f64,
+    digits: u32,
+    suffix: &str,
+    on_ok: impl Fn(f64) + 'static,
+) {
+    let spin = gtk::SpinButton::with_range(0.0, 1_000_000.0, 1.0);
+    spin.set_digits(digits);
+    spin.set_value(initial);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.set_halign(gtk::Align::Center);
+    row.append(&spin);
+    if !suffix.is_empty() {
+        row.append(&gtk::Label::new(Some(suffix)));
+    }
+    let d = dialog(ctx, heading, body);
+    d.set_extra_child(Some(&row));
+    d.add_responses(&[("cancel", "Cancelar"), ("ok", "Salvar")]);
+    d.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
+    d.set_default_response(Some("ok"));
+    d.set_close_response("cancel");
+    d.connect_response(None, move |_, response| {
+        if response == "ok" {
+            on_ok(spin.value());
+        }
     });
     d.present();
 }

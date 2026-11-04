@@ -110,6 +110,26 @@ CREATE INDEX IF NOT EXISTS ix_rule_habit ON habit_rule (habit_id, kind);
 -- diary_entry ganha: rule_id INTEGER REFERENCES habit_rule(id) ON DELETE SET NULL
 -- Uma entrada ligada a uma regra "não permitido" reinicia a sequência; "permitido" não.
 
+-- v3: hábitos de check diário e foco.
+-- habit ganha: kind INTEGER (0 = parar/contador, 1 = criar/check diário),
+--              schedule_days INTEGER (bit 0 = segunda … bit 6 = domingo; 127 = todos),
+--              daily_target REAL (0 = só marcar), target_unit TEXT
+CREATE TABLE IF NOT EXISTS checkin (
+    habit_id   INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    day        TEXT    NOT NULL,                 -- AAAA-MM-DD (data local)
+    amount     REAL    NOT NULL DEFAULT 1 CHECK (amount > 0),  -- progresso do dia
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (habit_id, day)
+);
+CREATE TABLE IF NOT EXISTS focus_session (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    habit_id    INTEGER REFERENCES habit(id) ON DELETE SET NULL,
+    started_at  INTEGER NOT NULL,
+    ended_at    INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL CHECK (duration_ms > 0),
+    mode        INTEGER NOT NULL DEFAULT 0      -- 0 = Pomodoro, 1 = cronômetro
+);
+
 -- Configurações chave/valor (substitui o DataStore).
 CREATE TABLE IF NOT EXISTS setting (
     key   TEXT PRIMARY KEY,
