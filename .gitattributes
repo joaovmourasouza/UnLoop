@@ -1,0 +1,4 @@
+# Scripts e o manifest sempre com LF (rodam no Linux)
+*.sh text eol=lf
+*.json text eol=lf
+*.desktop text eol=lf

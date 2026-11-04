@@ -77,7 +77,7 @@ enum Command {
     /// Sessões de foco (Pomodoro)
     #[command(subcommand)]
     Focus(FocusCmd),
-    /// Exporta um backup JSON completo (stdout ou --out)
+    /// Exporta um backup JSON completo para o stdout (redirecione: `> backup.json`) ou --out
     Export {
         #[arg(long)]
         out: Option<PathBuf>,
@@ -185,7 +185,7 @@ enum NoteCmd {
         title: String,
         #[arg(long)]
         body: Option<String>,
-        /// Lê o corpo (Markdown) de um arquivo
+        /// Lê o corpo (Markdown) de um arquivo; "-" lê da entrada padrão
         #[arg(long, conflicts_with = "body")]
         body_file: Option<PathBuf>,
         /// Tags separadas por vírgula
@@ -289,7 +289,7 @@ struct TaskFields {
     /// Descrição (Markdown)
     #[arg(long)]
     desc: Option<String>,
-    /// Lê a descrição de um arquivo
+    /// Lê a descrição de um arquivo; "-" lê da entrada padrão
     #[arg(long, conflicts_with = "desc")]
     desc_file: Option<PathBuf>,
     /// Prazo: hoje, amanhã 14:00, +3, sex, 2026-03-12… ("nenhum" remove)
@@ -530,9 +530,16 @@ fn find_list(db: &Db, query: &str, create: bool) -> Res<Option<i64>> {
     }
 }
 
+/// Texto de `--body`/`--desc` ou de arquivo. `-` lê da entrada padrão (funciona também
+/// dentro do Flatpak, onde a CLI não enxerga /tmp nem a home).
 fn read_text(inline: Option<String>, file: Option<PathBuf>) -> Res<Option<String>> {
     match (inline, file) {
         (Some(t), _) => Ok(Some(t)),
+        (None, Some(path)) if path.as_os_str() == "-" => {
+            let mut text = String::new();
+            ok(std::io::Read::read_to_string(&mut std::io::stdin(), &mut text))?;
+            Ok(Some(text))
+        }
         (None, Some(path)) => ok(std::fs::read_to_string(&path)).map(Some),
         (None, None) => Ok(None),
     }

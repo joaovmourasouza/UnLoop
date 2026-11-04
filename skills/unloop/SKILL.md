@@ -9,14 +9,20 @@ O UnLoop é o rastreador de hábitos e tarefas do usuário (app GNOME, dados num
 
 ## Como chamar
 
-- App instalado como Flatpak: `flatpak run --command=unloop-cli io.github.joaovmourasouza.UnLoop <comando>`
-  (sugira ao usuário `alias unloop-cli='flatpak run --command=unloop-cli io.github.joaovmourasouza.UnLoop'`).
-- Compilado localmente: `unloop-cli <comando>` (ou `cargo run -q -p unloop-cli -- <comando>` no repositório).
+- Use `unloop-cli <comando>`. É um wrapper em `~/.local/bin` criado por `scripts/install-cli.sh` (aponta para o Flatpak ou para um binário compilado).
+- Se `unloop-cli` não existir, use `flatpak run --command=unloop-cli io.github.joaovmourasouza.UnLoop <comando>` e sugira ao usuário rodar `scripts/install-cli.sh` no repositório do UnLoop. Aliases não funcionam aqui: o shell dos agentes não os carrega.
 - **Sempre use `--json`** para ler dados. Para conferir qual banco está em uso: `unloop-cli where`.
+- **Textos longos** (descrições, análises): passe pela entrada padrão com `-`, porque dentro do Flatpak a CLI não enxerga `/tmp` nem a home:
+  ```bash
+  unloop-cli note add "refrigerante" --kind insight --source claude --title "Padrão das sextas" --body-file - <<'EOF'
+  ...markdown...
+  EOF
+  ```
+- Outros agentes podem estar usando o UnLoop ao mesmo tempo: **sempre leia antes de criar** (evita tarefas e notas duplicadas).
 
 ## Regras de segurança
 
-1. Antes de mudanças em massa (muitas tarefas, reescrever notas), faça backup: `unloop-cli export --out ~/unloop-backup-$(date +%Y%m%d-%H%M).json`.
+1. Antes de mudanças em massa (muitas tarefas, reescrever notas), faça backup redirecionando a saída (funciona com Flatpak): `unloop-cli export > ~/unloop-backup-$(date +%Y%m%d-%H%M).json`.
 2. Apagar exige `--yes`. **Só apague com confirmação explícita do usuário**, citando o que será apagado.
 3. Notas e análises escritas por você levam `--source claude` (o app mostra 🤖).
 4. Não invente dados: leia antes (`context --json`, `habit show`, `task show`) e cite números reais.
@@ -45,17 +51,23 @@ unloop-cli checkin "acordar cedo" --undo
 # Notas do hábito: trigger (me leva a fazer), helper (me ajuda), note, insight (análise)
 unloop-cli note add "refrigerante" --kind trigger --title "Pós-almoço" --body "Sono e tédio por volta das 14h." --tags "tarde,trabalho"
 unloop-cli note add "refrigerante" --kind helper --title "Água com gás gelada" --body "..."
-unloop-cli note add "refrigerante" --kind insight --source claude --title "Padrão das sextas" --body-file /tmp/analise.md
+unloop-cli note add "refrigerante" --kind insight --source claude --title "Padrão das sextas" --body-file - < analise.md
 unloop-cli --json note list --habit "refrigerante" --kind trigger
 unloop-cli note edit 12 --body "..."
 
 # Tarefas
 unloop-cli task add "Preparar apresentação" --list Trabalho --due "sex 14:00" --priority high \
-  --tags "cliente" --desc-file /tmp/descricao.md --subtask "Rascunho" --subtask "Revisão"
-# (descrições longas: escreva o Markdown num arquivo temporário e use --desc-file)
+  --tags "cliente" --desc-file - --subtask "Rascunho" --subtask "Revisão" <<'EOF'
+## Objetivo
+...
+## Pronto quando
+...
+EOF
 unloop-cli --json task list --view today      # today | week | overdue | inbox | all | done
 unloop-cli --json task show 42
-unloop-cli task edit 42 --desc-file /tmp/descricao.md --due amanhã
+unloop-cli task edit 42 --due amanhã --desc-file - <<'EOF'
+...nova descrição...
+EOF
 unloop-cli task done 42
 unloop-cli task sub add 42 "Enviar por e-mail"
 unloop-cli list all | list add "Casa" | list rename Casa "Lar" | list delete Lar --yes

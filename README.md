@@ -104,10 +104,6 @@ Botão **✅ Tarefas** (Ctrl+T):
 `unloop-cli` lê e modifica tudo pela linha de comando, no mesmo banco do app. O app aberto se atualiza sozinho quando a CLI grava.
 
 ```bash
-# Flatpak:
-alias unloop-cli='flatpak run --command=unloop-cli io.github.joaovmourasouza.UnLoop'
-# ou compilado: cargo build --release -p unloop-cli  →  target/release/unloop-cli
-
 unloop-cli --help
 unloop-cli --json context                    # retrato completo para análise
 unloop-cli note add "refrigerante" --kind trigger --title "Pós-almoço" --body "Sono e tédio às 14h"
@@ -117,11 +113,24 @@ unloop-cli checkin "leitura" --add 15
 
 Todo comando aceita `--json`. Apagar exige `--yes`. `unloop-cli where` mostra o banco em uso; `--db` ou `$UNLOOP_DB` escolhem outro.
 
-**Para o Claude Code usar**, copie o skill:
+### Instalação para o terminal e para agentes (Claude Code, Orca…)
 
 ```bash
-mkdir -p ~/.claude/skills && cp -r skills/unloop ~/.claude/skills/
+scripts/install-cli.sh                 # agentes leem e escrevem; apagar sempre pede confirmação
+scripts/install-cli.sh --read-only     # agentes só leem sem pedir; qualquer escrita pede aprovação
+scripts/install-cli.sh --backup-timer  # + backup diário em ~/.local/share/unloop-backups (30 dias)
 ```
+
+O script:
+1. Cria o wrapper `~/.local/bin/unloop-cli`, apontando para o Flatpak ou, sem ele, para `target/release/unloop-cli`; escolha com `--flatpak` ou `--bin CAMINHO`. Alias não serve, porque o shell dos agentes não carrega aliases.
+2. Copia o skill para `~/.claude/skills/unloop`, e com isso ele vale em qualquer projeto.
+3. Mescla as permissões no `~/.claude/settings.json` sem apagar o que já existe, guardando um backup do arquivo antes.
+
+Pode rodar de novo para trocar de modo ou atualizar o skill.
+
+Dentro do Flatpak a CLI não enxerga `/tmp` nem a sua home. Por isso, para textos longos use `--body-file -` ou `--desc-file -` (entrada padrão), e para backup use `unloop-cli export > arquivo.json`.
+
+Vários agentes podem usar ao mesmo tempo: o SQLite em modo WAL aguenta, e o app se atualiza sozinho. O skill manda ler antes de criar, para evitar duplicatas.
 
 Depois é só pedir em linguagem natural, por exemplo:
 - "anota no UnLoop que café depois das 16h me faz querer refrigerante";
