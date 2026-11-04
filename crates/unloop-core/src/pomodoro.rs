@@ -520,6 +520,71 @@ pub fn by_hour(records: &[FocusRecord]) -> [i64; 24] {
 }
 
 /// Dias seguidos com pelo menos uma sessão, terminando hoje (ou ontem, se hoje ainda não teve).
+/// Comparação de um período com o anterior.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Comparison {
+    pub current: Totals,
+    pub previous: Totals,
+    /// Período ainda em andamento: compara só até o mesmo ponto (ex.: seg–qua × seg–qua).
+    pub partial: bool,
+}
+
+fn change(current: f64, previous: f64) -> Option<f64> {
+    (previous > 0.0).then(|| (current - previous) / previous)
+}
+
+impl Comparison {
+    /// Variação do tempo de foco (0,2 = +20%). `None` se o anterior foi zero.
+    pub fn time_change(&self) -> Option<f64> {
+        change(self.current.ms as f64, self.previous.ms as f64)
+    }
+
+    /// Variação do número de pomodoros.
+    pub fn pomodoro_change(&self) -> Option<f64> {
+        change(self.current.pomodoros as f64, self.previous.pomodoros as f64)
+    }
+}
+
+pub fn compare_with_previous(records: &[FocusRecord], period: Period, anchor: NaiveDate, today: NaiveDate) -> Comparison {
+    let (start, end) = period_range(period, anchor);
+    let partial = today >= start && today < end;
+    let current_end = if partial { today } else { end };
+    let (prev_start, prev_full_end) = period_range(period, shift_period(period, anchor, -1));
+    let prev_end = if partial {
+        let offset = (current_end - start).num_days().max(0) as u64;
+        prev_start.checked_add_days(chrono::Days::new(offset)).unwrap_or(prev_full_end).min(prev_full_end)
+    } else {
+        prev_full_end
+    };
+    Comparison {
+        current: totals(records.iter().filter(|r| in_range(r, (start, current_end)))),
+        previous: totals(records.iter().filter(|r| in_range(r, (prev_start, prev_end)))),
+        partial,
+    }
+}
+
+/// Ex.: "+20% em relação à semana anterior (até o mesmo dia)".
+pub fn comparison_text(c: &Comparison, period: Period) -> String {
+    let previous = match period {
+        Period::Week => "à semana anterior",
+        Period::Month => "ao mês anterior",
+        Period::Year => "ao ano anterior",
+    };
+    let scope = if c.partial { " (até o mesmo dia)" } else { "" };
+    match c.time_change() {
+        None if c.current.ms == 0 => "Sem foco neste período nem no anterior.".to_string(),
+        None => format!("Sem foco no período anterior para comparar{scope}."),
+        Some(ch) => {
+            let pct = (ch * 100.0).round() as i64;
+            if pct == 0 {
+                format!("Mesmo tempo de foco em relação {previous}{scope}.")
+            } else {
+                format!("{}{}% de foco em relação {previous}{scope}", if pct > 0 { "+" } else { "−" }, pct.abs())
+            }
+        }
+    }
+}
+
 pub fn focus_day_streak(records: &[FocusRecord], today: NaiveDate) -> u32 {
     let days: std::collections::BTreeSet<NaiveDate> = records.iter().map(|r| local_date(r.started_at)).collect();
     let mut day = if days.contains(&today) {
@@ -744,5 +809,74 @@ mod tests {
         let custom = Settings { focus_min: 50, auto_start_focus: true, ..Settings::default() };
         custom.save(&db).unwrap();
         assert_eq!(Settings::load(&db), custom);
+    }
+}
+
+#[cfg(test)]
+mod comparison_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn session(y: i32, m: u32, d: u32, minutes: i64) -> FocusRecord {
+        let start = chrono::Local
+            .with_ymd_and_hms(y, m, d, 12, 0, 0)
+            .single()
+            .map(|dt| dt.timestamp_millis())
+            .unwrap();
+        FocusRecord {
+            id: 0,
+            habit_id: None,
+            started_at: start,
+            ended_at: start + minutes * MS_PER_MINUTE,
+            duration_ms: minutes * MS_PER_MINUTE,
+            mode: Mode::Pomodoro,
+        }
+    }
+
+    fn day(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2025, 1, d).unwrap()
+    }
+
+    #[test]
+    fn compara_ate_o_mesmo_ponto_do_periodo() {
+        // Semana anterior: seg 6 e ter 7 (100 min) + qui 9 (fora da janela seg–qua).
+        // Semana atual até quarta 15: 50 + 50 + 20 = 120 min → +20%.
+        let records = vec![
+            session(2025, 1, 6, 50),
+            session(2025, 1, 7, 50),
+            session(2025, 1, 9, 60),
+            session(2025, 1, 13, 50),
+            session(2025, 1, 14, 50),
+            session(2025, 1, 15, 20),
+        ];
+        let c = compare_with_previous(&records, Period::Week, day(15), day(15));
+        assert!(c.partial);
+        assert_eq!(c.current.ms, 120 * MS_PER_MINUTE);
+        assert_eq!(c.previous.ms, 100 * MS_PER_MINUTE);
+        assert!((c.time_change().unwrap() - 0.2).abs() < 1e-9);
+        assert!((c.pomodoro_change().unwrap() - 0.5).abs() < 1e-9); // 3 × 2 sessões
+        assert_eq!(
+            comparison_text(&c, Period::Week),
+            "+20% de foco em relação à semana anterior (até o mesmo dia)"
+        );
+
+        // Semana passada inteira (já encerrada) contra a retrasada, que não teve foco.
+        let past = compare_with_previous(&records, Period::Week, day(8), day(15));
+        assert!(!past.partial);
+        assert_eq!(past.current.ms, 160 * MS_PER_MINUTE);
+        assert_eq!(past.time_change(), None);
+        assert_eq!(comparison_text(&past, Period::Week), "Sem foco no período anterior para comparar.");
+    }
+
+    #[test]
+    fn queda_e_sem_dados() {
+        let records = vec![session(2024, 12, 10, 100), session(2025, 1, 10, 75)];
+        // No último dia do período a comparação já é com o mês anterior inteiro.
+        assert!(!compare_with_previous(&records, Period::Month, day(20), day(31)).partial);
+        let full = compare_with_previous(&records, Period::Month, day(20), NaiveDate::from_ymd_opt(2025, 2, 5).unwrap());
+        assert!(!full.partial);
+        assert_eq!(comparison_text(&full, Period::Month), "−25% de foco em relação ao mês anterior");
+        let empty = compare_with_previous(&[], Period::Year, day(1), day(1));
+        assert_eq!(comparison_text(&empty, Period::Year), "Sem foco neste período nem no anterior.");
     }
 }

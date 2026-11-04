@@ -281,12 +281,10 @@ fn rerender_stats(ctx: &Shared, b: &gtk::Box, state: &Rc<StatsState>) {
 
 fn stats_tab(ctx: &Shared, b: &gtk::Box, state: &Rc<StatsState>) {
     let records = ctx.check(ctx.db.focus_sessions_since(0)).unwrap_or_default();
-    let names: HashMap<i64, String> = ctx
-        .check(ctx.db.habits())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|h| (h.id, format!("{} {}", h.icon_info().emoji, h.name)))
-        .collect();
+    let all_habits = ctx.check(ctx.db.habits()).unwrap_or_default();
+    let names: HashMap<i64, String> =
+        all_habits.iter().map(|h| (h.id, format!("{} {}", h.icon_info().emoji, h.name))).collect();
+    let colors: HashMap<i64, String> = all_habits.iter().map(|h| (h.id, h.color_info().hex.to_string())).collect();
     let habit_name = |id: Option<i64>| id.and_then(|i| names.get(&i).cloned()).unwrap_or_else(|| "Sem hábito".to_string());
     let today = checkin::today();
 
@@ -379,6 +377,31 @@ fn stats_tab(ctx: &Shared, b: &gtk::Box, state: &Rc<StatsState>) {
     chart.set_margin_end(12);
     card.append(&chart);
     chart_group.add(&card);
+
+    // Comparação com o período anterior
+    let comparison = pomodoro::compare_with_previous(&records, period, anchor, today);
+    let trend = match comparison.time_change() {
+        Some(c) if c > 0.0 => "📈",
+        Some(c) if c < 0.0 => "📉",
+        _ => "➖",
+    };
+    let pomodoro_trend = comparison
+        .pomodoro_change()
+        .map(|c| format!(" ({}{:.0}%)", if c >= 0.0 { "+" } else { "−" }, (c * 100.0).abs()))
+        .unwrap_or_default();
+    let comparison_row = adw::ActionRow::builder()
+        .title(esc(&pomodoro::comparison_text(&comparison, period)))
+        .subtitle(esc(&format!(
+            "Agora: {} · {} 🍅{} — antes: {} · {} 🍅",
+            format_compact(comparison.current.ms),
+            comparison.current.pomodoros,
+            pomodoro_trend,
+            format_compact(comparison.previous.ms),
+            comparison.previous.pomodoros
+        )))
+        .build();
+    comparison_row.add_prefix(&gtk::Label::new(Some(trend)));
+    chart_group.add(&comparison_row);
     b.append(&chart_group);
 
     if selected.is_empty() {
@@ -387,22 +410,46 @@ fn stats_tab(ctx: &Shared, b: &gtk::Box, state: &Rc<StatsState>) {
     }
 
     // Distribuição por hábito
+    // Cor de cada fatia: a cor do hábito; se repetir, uma cor da paleta.
+    const PALETTE: [&str; 8] = ["3584E4", "2EC27E", "F5C211", "E66100", "C061CB", "865E3C", "1C71D8", "E01B24"];
+    let mut used = std::collections::HashSet::new();
+    let slices: Vec<(Option<i64>, i64, String)> = pomodoro::by_habit(&selected)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (habit_id, ms))| {
+            let mut hex = habit_id.and_then(|id| colors.get(&id).cloned()).unwrap_or_else(|| "9A9996".to_string());
+            if !used.insert(hex.clone()) {
+                hex = PALETTE[i % PALETTE.len()].to_string();
+                used.insert(hex.clone());
+            }
+            (habit_id, ms, hex)
+        })
+        .collect();
+
     let distribution = widgets::group("Distribuição por hábito", None);
-    let list = widgets::boxed_list();
-    for (habit_id, ms) in pomodoro::by_habit(&selected) {
-        let share = ms as f64 / period_totals.ms.max(1) as f64;
+    let layout = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+    let donut = widgets::donut_chart(
+        slices.iter().map(|(_, ms, hex)| (*ms as f64, hex.clone())).collect(),
+        &format!("{}\nno período", format_compact(period_totals.ms)),
+        180,
+    );
+    layout.append(&donut);
+    let legend = widgets::boxed_list();
+    legend.set_hexpand(true);
+    legend.set_valign(gtk::Align::Center);
+    for (habit_id, ms, hex) in &slices {
+        let share = *ms as f64 / period_totals.ms.max(1) as f64;
         let row = adw::ActionRow::builder()
-            .title(esc(&habit_name(habit_id)))
-            .subtitle(format!("{} · {:.0}%", format_compact(ms), share * 100.0))
+            .title(esc(&habit_name(*habit_id)))
+            .subtitle(format!("{} · {:.0}%", format_compact(*ms), share * 100.0))
             .build();
-        let bar = gtk::ProgressBar::new();
-        bar.set_fraction(share);
-        bar.set_valign(gtk::Align::Center);
-        bar.set_width_request(160);
-        row.add_suffix(&bar);
-        list.append(&row);
+        let dot = gtk::Label::new(None);
+        dot.set_markup(&format!("<span foreground=\"#{hex}\" size=\"x-large\">●</span>"));
+        row.add_prefix(&dot);
+        legend.append(&row);
     }
-    distribution.add(&list);
+    layout.append(&legend);
+    distribution.add(&layout);
     b.append(&distribution);
 
     // Melhor horário

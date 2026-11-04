@@ -175,6 +175,61 @@ pub fn bar_chart(values: &[(String, i64)], color_class: Option<&str>) -> gtk::Bo
     chart
 }
 
+/// "RRGGBB" → (r, g, b) em 0..1.
+pub fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
+    let clean = hex.trim_start_matches('#');
+    let channel = |i: usize| {
+        clean
+            .get(i..i + 2)
+            .and_then(|s| u8::from_str_radix(s, 16).ok())
+            .map_or(0.5, |v| f64::from(v) / 255.0)
+    };
+    (channel(0), channel(2), channel(4))
+}
+
+/// Gráfico de rosca (pizza com furo). `slices` = (valor, cor "RRGGBB").
+/// `center` aparece no meio (ex.: total).
+pub fn donut_chart(slices: Vec<(f64, String)>, center: &str, size: i32) -> gtk::Overlay {
+    let area = gtk::DrawingArea::new();
+    area.set_content_width(size);
+    area.set_content_height(size);
+    let total: f64 = slices.iter().map(|s| s.0.max(0.0)).sum();
+    let colors: Vec<(f64, (f64, f64, f64))> = slices.iter().map(|(v, hex)| (v.max(0.0), hex_to_rgb(hex))).collect();
+    area.set_draw_func(move |_, cr, width, height| {
+        if total <= 0.0 {
+            return;
+        }
+        let (cx, cy) = (f64::from(width) / 2.0, f64::from(height) / 2.0);
+        let outer = cx.min(cy) - 2.0;
+        let inner = outer * 0.6;
+        let mut angle = -std::f64::consts::FRAC_PI_2;
+        for (value, (r, g, b)) in &colors {
+            let sweep = value / total * std::f64::consts::TAU;
+            if sweep <= 0.0 {
+                continue;
+            }
+            cr.set_source_rgb(*r, *g, *b);
+            cr.new_path();
+            cr.arc(cx, cy, outer, angle, angle + sweep);
+            cr.arc_negative(cx, cy, inner, angle + sweep, angle);
+            cr.close_path();
+            let _ = cr.fill();
+            angle += sweep;
+        }
+    });
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&area));
+    overlay.set_halign(gtk::Align::Center);
+    overlay.set_valign(gtk::Align::Center);
+    let label = gtk::Label::new(Some(center));
+    label.add_css_class("heading");
+    label.set_justify(gtk::Justification::Center);
+    label.set_halign(gtk::Align::Center);
+    label.set_valign(gtk::Align::Center);
+    overlay.add_overlay(&label);
+    overlay
+}
+
 // --------------------------------------------------------- Textos do contador
 
 pub fn counter_text(h: &Habit, s: &HabitSnapshot) -> String {
