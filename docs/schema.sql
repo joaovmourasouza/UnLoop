@@ -98,6 +98,18 @@ CREATE TABLE IF NOT EXISTS affirmation (
 );
 CREATE INDEX IF NOT EXISTS ix_affirmation_habit ON affirmation (habit_id);
 
+-- v2: regras do hábito. kind 0 = permitido (não reinicia), 1 = não permitido (reinicia).
+CREATE TABLE IF NOT EXISTS habit_rule (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    habit_id INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    kind     INTEGER NOT NULL CHECK (kind IN (0,1)),
+    text     TEXT    NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_rule_habit ON habit_rule (habit_id, kind);
+-- diary_entry ganha: rule_id INTEGER REFERENCES habit_rule(id) ON DELETE SET NULL
+-- Uma entrada ligada a uma regra "não permitido" reinicia a sequência; "permitido" não.
+
 -- Configurações chave/valor (substitui o DataStore).
 CREATE TABLE IF NOT EXISTS setting (
     key   TEXT PRIMARY KEY,

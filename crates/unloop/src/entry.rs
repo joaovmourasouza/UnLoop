@@ -4,7 +4,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use unloop_core::model::DiaryEntry;
+use unloop_core::calc::entry_resets;
+use unloop_core::model::{DiaryEntry, HabitRule};
 use unloop_core::units::MS_PER_MINUTE;
 
 use crate::app::Shared;
@@ -44,7 +45,41 @@ pub fn page(ctx: &Shared, habit_id: i64, entry: Option<DiaryEntry>, initial_rese
         .subtitle("Recaídas reiniciam o contador a partir da data escolhida. Desligue para registrar só uma anotação ou um gasto.")
         .active(original.is_reset)
         .build();
+
+    // Regra relacionada: quando escolhida, ela decide se a entrada reinicia a sequência.
+    let rules: Rc<Vec<HabitRule>> = Rc::new(ctx.check(ctx.db.rules(habit_id)).unwrap_or_default());
+    let mut labels = vec!["Nenhuma (decidir manualmente)".to_string()];
+    labels.extend(rules.iter().map(|r| format!("{} {}", r.kind.emoji(), r.text)));
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let rule_row = adw::ComboRow::builder()
+        .title("Regra relacionada")
+        .subtitle(if rules.is_empty() {
+            "Defina o que é permitido e o que não é na aba Regras do hábito."
+        } else {
+            "Permitido não reinicia o contador; não permitido reinicia."
+        })
+        .model(&gtk::StringList::new(&label_refs))
+        .build();
+    let initial_index = original
+        .rule_id
+        .and_then(|id| rules.iter().position(|r| r.id == id))
+        .map_or(0, |i| i + 1);
+    rule_row.set_selected(initial_index as u32);
+    let sync = {
+        let (rules, reset) = (rules.clone(), reset.clone());
+        move |index: u32| match (index as usize).checked_sub(1).and_then(|i| rules.get(i)) {
+            Some(rule) => {
+                reset.set_active(rule.kind.resets_streak());
+                reset.set_sensitive(false);
+            }
+            None => reset.set_sensitive(true),
+        }
+    };
+    sync(rule_row.selected());
+    rule_row.connect_selected_notify(move |row| sync(row.selected()));
+
     event.add(&when_row);
+    event.add(&rule_row);
     event.add(&reset);
     prefs.add(&event);
 
@@ -98,12 +133,14 @@ pub fn page(ctx: &Shared, habit_id: i64, entry: Option<DiaryEntry>, initial_rese
         let buffer = text.buffer();
         let (start, end) = buffer.bounds();
         let note = buffer.text(&start, &end, false).to_string();
+        let rule = (rule_row.selected() as usize).checked_sub(1).and_then(|i| rules.get(i));
         let e = DiaryEntry {
             occurred_at: when.get().min(unloop_core::now_ms()),
             money_spent: money.value(),
             time_spent_ms: (minutes.value() * MS_PER_MINUTE as f64).round() as i64,
-            is_reset: reset.is_active(),
+            is_reset: entry_resets(rule, reset.is_active()),
             note: if note.trim().is_empty() { None } else { Some(note) },
+            rule_id: rule.map(|r| r.id),
             ..original.clone()
         };
         let ok = if editing {

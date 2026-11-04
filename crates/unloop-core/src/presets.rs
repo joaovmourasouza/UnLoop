@@ -91,6 +91,107 @@ pub const HABIT_SUGGESTIONS: &[i64] = &[
     2017, 2012, 2007, 2008, 20120, 2021, 2019, 2024, 2022, 2023, 2025, 2026, 2027,
 ];
 
+/// Sugestões de regras: (códigos de ícone, permitido, não permitido).
+/// São só pontos de partida: cada pessoa define os próprios limites.
+type RuleSuggestion = (&'static [i64], &'static [&'static str], &'static [&'static str]);
+
+const RULE_SUGGESTIONS: &[RuleSuggestion] = &[
+    (
+        &[20120],
+        &["Refrigerante sem açúcar (zero/diet)", "Água com gás", "Água com gás e limão", "Chá gelado sem açúcar"],
+        &["Refrigerante comum (com açúcar)", "Energético com açúcar", "Suco de caixinha adoçado"],
+    ),
+    (
+        &[2008, 2030],
+        &["Frutas", "Adoçante", "Chocolate 70% cacau ou mais"],
+        &["Doces e sobremesas", "Bebidas adoçadas com açúcar", "Açúcar no café ou no chá"],
+    ),
+    (
+        &[2003, 2054],
+        &["Cerveja sem álcool", "Drinks sem álcool", "Água com gás e limão em eventos"],
+        &["Cerveja", "Vinho", "Destilados e drinks com álcool"],
+    ),
+    (
+        &[2002],
+        &["Adesivo ou goma de nicotina (tratamento)"],
+        &["Cigarro", "Narguilé", "Cigarro eletrônico / pod"],
+    ),
+    (
+        &[2057],
+        &["Adesivo ou goma de nicotina (tratamento)"],
+        &["Vape / pod", "Cigarro", "Narguilé"],
+    ),
+    (
+        &[2021],
+        &["Café descafeinado", "Chá sem cafeína (camomila, erva-doce)"],
+        &["Café comum", "Energético", "Chá preto, verde ou mate"],
+    ),
+    (
+        &[2007, 2051],
+        &["Lanche caseiro", "Refeição preparada em casa"],
+        &["Delivery de fast food", "Drive-thru", "Salgadinhos de pacote"],
+    ),
+    (
+        &[2019],
+        &["Repetir salada ou legumes", "Lanche planejado entre refeições"],
+        &["Repetir o prato principal", "Comer direto da embalagem", "Beliscar sem fome"],
+    ),
+    (
+        &[2013, 2014, 2015, 2017, 2018, 2056],
+        &[
+            "Responder mensagens diretas de amigos e família",
+            "Uso no computador com tempo definido (ex.: 15 min)",
+            "Publicar algo sem ficar rolando o feed",
+        ],
+        &[
+            "Rolar o feed sem objetivo",
+            "Abrir o app logo ao acordar ou antes de dormir",
+            "Assistir vídeos curtos em sequência",
+        ],
+    ),
+    (
+        &[2010, 2040],
+        &["Jogar com amigos em horário combinado", "Jogos de tabuleiro"],
+        &["Jogar em dia de semana", "Jogar depois da meia-noite", "Compras dentro do jogo"],
+    ),
+    (
+        &[2011],
+        &["Um episódio ou filme escolhido com antecedência"],
+        &["Maratonar séries", "TV ligada durante as refeições"],
+    ),
+    (
+        &[2012, 2052],
+        &["Compras da lista planejada", "Itens essenciais com orçamento definido"],
+        &["Compras por impulso", "Navegar em lojas online sem lista", "Parcelar algo não planejado"],
+    ),
+    (
+        &[2016, 2033],
+        &["Jogos sem dinheiro com amigos"],
+        &["Apostas esportivas", "Cassino online", "Loteria e raspadinhas"],
+    ),
+    (
+        &[2022],
+        &["Pausa curta com hora para acabar"],
+        &["Adiar a tarefa mais importante do dia", "Abrir distrações antes de começar"],
+    ),
+    (
+        &[2050, 2045],
+        &["Ligações e mensagens necessárias", "Celular no modo foco durante o trabalho"],
+        &["Celular na cama", "Pegar o celular nas refeições"],
+    ),
+];
+
+const NO_SUGGESTIONS: &[&str] = &[];
+
+/// Sugestões de regras para o ícone do hábito: (permitido, não permitido).
+pub fn rule_suggestions(icon_code: i64) -> (&'static [&'static str], &'static [&'static str]) {
+    RULE_SUGGESTIONS
+        .iter()
+        .find(|(codes, _, _)| codes.contains(&icon_code))
+        .map(|(_, allowed, forbidden)| (*allowed, *forbidden))
+        .unwrap_or((NO_SUGGESTIONS, NO_SUGGESTIONS))
+}
+
 pub const DEFAULT_AFFIRMATIONS: &[&str] = &[
     "Eu estou no controle das minhas escolhas.",
     "Cada dia limpo é uma vitória que ninguém tira de mim.",
@@ -126,6 +227,15 @@ mod tests {
         assert_eq!(preset_for_duration(7_889_238_000).map(|p| p.key.as_str()), Some("MONTH_3"));
         assert_eq!(preset_for_duration(86_400_000).map(|p| p.key.as_str()), Some("DAY_1"));
         assert_eq!(preset_for_duration(123), None);
+    }
+
+    #[test]
+    fn sugestoes_de_regras() {
+        let (allowed, forbidden) = rule_suggestions(20120);
+        assert!(allowed.contains(&"Refrigerante sem açúcar (zero/diet)"));
+        assert!(forbidden.contains(&"Refrigerante comum (com açúcar)"));
+        let (a, f) = rule_suggestions(2001);
+        assert!(a.is_empty() && f.is_empty());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::calc::HabitBundle;
 use crate::model::*;
 use crate::presets::{goal_presets, DEFAULT_AFFIRMATIONS};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Tabelas de texto simples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +60,10 @@ impl Db {
             if current < 1 {
                 self.conn.execute_batch(SCHEMA_V1)?;
             }
-            // Próximas versões: if current < 2 { self.conn.execute_batch(MIGRATION_V2)?; }
+            if current < 2 {
+                self.conn.execute_batch(MIGRATION_V2)?;
+            }
+            // Próximas versões: if current < 3 { self.conn.execute_batch(MIGRATION_V3)?; }
             self.conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
         })
     }
@@ -193,6 +196,7 @@ impl Db {
             investments: self.investments(id)?,
             reasons: self.text_items(TextTable::Reason, id)?,
             affirmations: self.text_items(TextTable::Affirmation, id)?,
+            rules: self.rules(id)?,
             habit,
         }))
     }
@@ -216,9 +220,17 @@ impl Db {
 
     pub fn insert_entry(&self, e: &DiaryEntry) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO diary_entry (habit_id, occurred_at, money_spent, time_spent_ms, is_reset, note) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![e.habit_id, e.occurred_at, e.money_spent, e.time_spent_ms, e.is_reset, clean_note(&e.note)],
+            "INSERT INTO diary_entry (habit_id, occurred_at, money_spent, time_spent_ms, is_reset, note, rule_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                e.habit_id,
+                e.occurred_at,
+                e.money_spent,
+                e.time_spent_ms,
+                e.is_reset,
+                clean_note(&e.note),
+                e.rule_id
+            ],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -226,9 +238,47 @@ impl Db {
     pub fn update_entry(&self, e: &DiaryEntry) -> Result<()> {
         self.conn.execute(
             "UPDATE diary_entry SET occurred_at = ?1, money_spent = ?2, time_spent_ms = ?3, \
-             is_reset = ?4, note = ?5 WHERE id = ?6",
-            params![e.occurred_at, e.money_spent, e.time_spent_ms, e.is_reset, clean_note(&e.note), e.id],
+             is_reset = ?4, note = ?5, rule_id = ?6 WHERE id = ?7",
+            params![
+                e.occurred_at,
+                e.money_spent,
+                e.time_spent_ms,
+                e.is_reset,
+                clean_note(&e.note),
+                e.rule_id,
+                e.id
+            ],
         )?;
+        Ok(())
+    }
+
+    // ----------------------------------------------------------------- Regras
+
+    /// Permitidos primeiro, depois não permitidos.
+    pub fn rules(&self, habit_id: i64) -> Result<Vec<HabitRule>> {
+        let mut st =
+            self.conn.prepare("SELECT * FROM habit_rule WHERE habit_id = ?1 ORDER BY kind, position, id")?;
+        let rows = st.query_map([habit_id], rule_from_row)?;
+        rows.collect()
+    }
+
+    pub fn insert_rule(&self, habit_id: i64, kind: RuleKind, text: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO habit_rule (habit_id, kind, text, position) VALUES (?1, ?2, ?3, \
+             (SELECT COALESCE(MAX(position), -1) + 1 FROM habit_rule WHERE habit_id = ?1 AND kind = ?2))",
+            params![habit_id, kind.code(), text.trim()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_rule(&self, id: i64, text: &str) -> Result<()> {
+        self.conn.execute("UPDATE habit_rule SET text = ?1 WHERE id = ?2", params![text.trim(), id])?;
+        Ok(())
+    }
+
+    /// Entradas do diário que citavam a regra ficam sem regra (o histórico não muda).
+    pub fn delete_rule(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM habit_rule WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -455,6 +505,17 @@ fn entry_from_row(r: &Row) -> Result<DiaryEntry> {
         time_spent_ms: r.get("time_spent_ms")?,
         is_reset: r.get("is_reset")?,
         note: r.get("note")?,
+        rule_id: r.get("rule_id")?,
+    })
+}
+
+fn rule_from_row(r: &Row) -> Result<HabitRule> {
+    Ok(HabitRule {
+        id: r.get("id")?,
+        habit_id: r.get("habit_id")?,
+        kind: RuleKind::from_code(r.get("kind")?),
+        text: r.get("text")?,
+        position: r.get("position")?,
     })
 }
 
@@ -601,12 +662,66 @@ CREATE TABLE setting (
 );
 "#;
 
+/// v2: regras do hábito (permitido / não permitido) e vínculo da entrada do diário com a regra.
+const MIGRATION_V2: &str = r#"
+CREATE TABLE habit_rule (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    habit_id INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    kind     INTEGER NOT NULL CHECK (kind IN (0,1)),
+    text     TEXT    NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX ix_rule_habit ON habit_rule (habit_id, kind);
+
+ALTER TABLE diary_entry ADD COLUMN rule_id INTEGER REFERENCES habit_rule(id) ON DELETE SET NULL;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::units::MS_PER_DAY;
 
     const BASE: i64 = 1_735_689_600_000;
+
+    #[test]
+    fn regras_e_vinculo_com_o_diario() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db.insert_habit(&Habit::new("Refrigerante", BASE), false).unwrap();
+        let zero = db.insert_rule(id, RuleKind::Allowed, "Refrigerante zero").unwrap();
+        let comum = db.insert_rule(id, RuleKind::Forbidden, " Refrigerante comum ").unwrap();
+        db.insert_rule(id, RuleKind::Allowed, "Água com gás").unwrap();
+
+        let rules = db.rules(id).unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].kind, RuleKind::Allowed);
+        assert_eq!(rules[2].text, "Refrigerante comum");
+
+        let entry_id = db
+            .insert_entry(&DiaryEntry { is_reset: false, rule_id: Some(zero), ..DiaryEntry::reset(id, BASE + MS_PER_DAY) })
+            .unwrap();
+        db.insert_entry(&DiaryEntry { rule_id: Some(comum), ..DiaryEntry::reset(id, BASE + 2 * MS_PER_DAY) })
+            .unwrap();
+        let bundle = db.bundle(id).unwrap().unwrap();
+        assert_eq!(bundle.rule_usage(zero), 1);
+        assert_eq!(bundle.rule(Some(comum)).map(|r| r.kind), Some(RuleKind::Forbidden));
+
+        // Apagar a regra mantém a entrada, só sem vínculo.
+        db.delete_rule(zero).unwrap();
+        let entries = db.entries(id).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.iter().find(|e| e.id == entry_id).unwrap().rule_id, None);
+
+        // Apagar o hábito apaga as regras.
+        db.delete_habit(id).unwrap();
+        assert!(db.rules(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn versao_do_esquema() {
+        let db = Db::open_in_memory().unwrap();
+        let v: i64 = db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
 
     #[test]
     fn novo_habito_recebe_metas_e_afirmacoes() {

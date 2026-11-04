@@ -57,6 +57,15 @@ flatpak run io.github.joaovmourasouza.UnLoop
 - No Flatpak, o banco fica em `~/.var/app/io.github.joaovmourasouza.UnLoop/data/unloop/unloop.db`.
 - Para publicar no Flathub, o build precisa ser offline. Gere o `cargo-sources.json` com o [flatpak-cargo-generator](https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo) a partir do `Cargo.lock`, troque `build-args` por `CARGO_NET_OFFLINE=true` e adicione `cargo-sources.json` em `sources`.
 
+## Regras: permitido × não permitido
+
+Cada hábito tem duas listas, na aba **Regras**:
+
+- ✅ **Permitido**: não reinicia a sequência. Ex. (parar com refrigerante): refrigerante sem açúcar, água com gás.
+- ⛔ **Não permitido**: reinicia a sequência. Ex.: refrigerante comum, energético com açúcar.
+
+Ao registrar algo no diário, escolha a regra relacionada e o app decide sozinho se o contador reinicia. Sem regra, vale a escolha manual ("Foi uma recaída"). A aba mostra quantas vezes cada regra foi registrada e oferece sugestões para os hábitos mais comuns.
+
 ## Migrando do Quitzilla
 
 No celular, faça um backup em arquivo (local). Copie o `.json` para o computador e use **Configurações → Restaurar backup**. Hábitos, diário, metas, recompensas, investimentos, motivos, afirmações, moeda e lema são importados. Os troféus são recalculados.
@@ -65,13 +74,12 @@ No celular, faça um backup em arquivo (local). Copie o `.json` para o computado
 
 > O código ainda **não foi compilado**: foi escrito numa máquina Windows sem Rust e sem GTK. Rode `cargo test -p unloop-core` e `cargo build -p unloop` primeiro e corrija o que o compilador apontar.
 
-Pronto: hábitos (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
+Pronto: hábitos (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), **regras por hábito** (o que é permitido e não reinicia a sequência, e o que não é permitido e reinicia; com sugestões prontas para hábitos comuns e vínculo com o diário), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
 
 Próximos passos:
 - [ ] Onboarding guiado (custo da vida toda, primeira meta, primeira recompensa)
 - [ ] Notificações (meta alcançada, troféu, frase do dia) via portal, usando a tabela `trophy` para marcar o que já foi notificado
 - [ ] Iniciar em segundo plano com a sessão (portal Background) para as notificações
 - [ ] Celebração ao alcançar uma meta
-- [ ] Layout adaptativo para telas estreitas (AdwBreakpoint + ViewSwitcherBar)
 - [ ] Senha opcional e banco cifrado (SQLCipher)
 - [ ] Manifest offline para o Flathub

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::model::{DiaryEntry, Goal, Habit, Reward, TimeInvestment, Trophy};
+use crate::model::{DiaryEntry, Goal, Habit, HabitRule, Reward, TimeInvestment, Trophy};
 use crate::units::{MS_PER_DAY, MS_PER_MINUTE};
 
 /// Início da sequência atual: a recaída mais recente, ou o início da jornada.
@@ -13,6 +13,12 @@ pub fn streak_start(quit_at: i64, entries: &[DiaryEntry]) -> i64 {
         .filter(|e| e.is_reset)
         .map(|e| e.occurred_at)
         .fold(quit_at, i64::max)
+}
+
+/// Se uma entrada reinicia a sequência: a regra escolhida decide
+/// (não permitido = reinicia, permitido = não reinicia); sem regra, vale a escolha manual.
+pub fn entry_resets(rule: Option<&HabitRule>, manual: bool) -> bool {
+    rule.map_or(manual, |r| r.kind.resets_streak())
 }
 
 /// Timestamps das recaídas, em ordem crescente.
@@ -215,6 +221,7 @@ pub struct HabitBundle {
     pub investments: Vec<TimeInvestment>,
     pub reasons: Vec<crate::model::TextItem>,
     pub affirmations: Vec<crate::model::TextItem>,
+    pub rules: Vec<HabitRule>,
 }
 
 /// Tudo que a UI precisa sobre um hábito num instante.
@@ -251,6 +258,16 @@ impl HabitSnapshot {
 }
 
 impl HabitBundle {
+    pub fn rule(&self, id: Option<i64>) -> Option<&HabitRule> {
+        let id = id?;
+        self.rules.iter().find(|r| r.id == id)
+    }
+
+    /// Quantas entradas do diário citam a regra.
+    pub fn rule_usage(&self, rule_id: i64) -> usize {
+        self.entries.iter().filter(|e| e.rule_id == Some(rule_id)).count()
+    }
+
     pub fn snapshot(&self, now: i64) -> HabitSnapshot {
         let start = streak_start(self.habit.quit_at, &self.entries);
         let resets = reset_timestamps(&self.entries);
@@ -306,6 +323,16 @@ mod tests {
         assert_eq!(streak_start(BASE, &[]), BASE);
         assert_eq!(streak_start(BASE, &[DiaryEntry::reset(1, BASE - MS_PER_DAY)]), BASE);
         assert_eq!(streak_start(BASE, &entries()[2..]), BASE);
+    }
+
+    #[test]
+    fn regras_decidem_se_reinicia() {
+        use crate::model::RuleKind;
+        let rule = |kind| HabitRule { id: 1, habit_id: 1, kind, text: "x".into(), position: 0 };
+        assert!(!entry_resets(Some(&rule(RuleKind::Allowed)), true));
+        assert!(entry_resets(Some(&rule(RuleKind::Forbidden)), false));
+        assert!(entry_resets(None, true));
+        assert!(!entry_resets(None, false));
     }
 
     #[test]
@@ -396,6 +423,7 @@ mod tests {
             investments: vec![],
             reasons: vec![],
             affirmations: vec![],
+            rules: vec![],
         };
         let s = bundle.snapshot(day(15.0));
         assert_eq!(s.start, day(12.0));

@@ -40,13 +40,20 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
     let habits = db.habits()?;
     let (mut entries, mut goals, mut rewards, mut investments, mut reasons, mut affirmations) =
         (vec![], vec![], vec![], vec![], vec![], vec![]);
+    let mut rules = vec![];
 
     for h in &habits {
+        for r in db.rules(h.id)? {
+            rules.push(json!({
+                "id": r.id, "habitId": h.id, "kind": r.kind.legacy(),
+                "text": r.text, "listPosition": r.position,
+            }));
+        }
         for e in db.entries(h.id)? {
             entries.push(json!({
                 "id": e.id, "habitId": h.id, "timestamp": e.occurred_at,
                 "moneySpent": e.money_spent, "timeSpent": e.time_spent_ms,
-                "isReset": e.is_reset, "comment": e.note,
+                "isReset": e.is_reset, "comment": e.note, "ruleId": e.rule_id,
             }));
         }
         for g in db.goals(h.id)? {
@@ -109,6 +116,7 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         "timeInvestments": investments,
         "reasons": reasons,
         "affirmations": affirmations,
+        "rules": rules,
         "settings": {
             "currencyCode": db.setting("currency")?,
             "mainTitle": db.setting("motto")?,
@@ -126,6 +134,7 @@ pub struct ImportSummary {
     pub investments: usize,
     pub reasons: usize,
     pub affirmations: usize,
+    pub rules: usize,
     pub from_quitzilla: bool,
 }
 
@@ -133,9 +142,16 @@ impl fmt::Display for ImportSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} hábito(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
+            "{} hábito(s), {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
              {} investimento(s), {} motivo(s), {} afirmação(ões)",
-            self.habits, self.entries, self.goals, self.rewards, self.investments, self.reasons, self.affirmations
+            self.habits,
+            self.rules,
+            self.entries,
+            self.goals,
+            self.rewards,
+            self.investments,
+            self.reasons,
+            self.affirmations
         )
     }
 }
@@ -187,16 +203,33 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
         }
         let map_habit = |v: &Value| int(v, "habitId").and_then(|old| id_map.get(&old).copied());
 
+        // Regras antes do diário, para remapear `ruleId`.
+        let mut rule_map = std::collections::HashMap::<i64, (i64, RuleKind)>::new();
+        for r in sorted_by_position(list(json, "rules")) {
+            let Some(hid) = map_habit(r) else { continue };
+            let body = text(r, "text");
+            if body.trim().is_empty() {
+                continue;
+            }
+            let kind = coded(r.get("kind"), RuleKind::from_code, RuleKind::from_legacy);
+            let new_id = db.insert_rule(hid, kind, &body)?;
+            rule_map.insert(int(r, "id").unwrap_or(0), (new_id, kind));
+            summary.rules += 1;
+        }
+
         for e in list(json, "diaryEntries") {
             let Some(hid) = map_habit(e) else { continue };
+            let rule = int(e, "ruleId").and_then(|old| rule_map.get(&old).copied());
+            let manual = boolean(e.get("isReset"), true);
             db.insert_entry(&DiaryEntry {
                 id: 0,
                 habit_id: hid,
                 occurred_at: int(e, "timestamp").unwrap_or(now),
                 money_spent: non_neg(e.get("moneySpent")),
                 time_spent_ms: non_neg(e.get("timeSpent")).round() as i64,
-                is_reset: boolean(e.get("isReset"), true),
+                is_reset: rule.map_or(manual, |(_, kind)| kind.resets_streak()),
                 note: e.get("comment").and_then(Value::as_str).map(str::to_string),
+                rule_id: rule.map(|(id, _)| id),
             })?;
             summary.entries += 1;
         }
@@ -309,9 +342,15 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
 
 /// Diário de todos os hábitos em CSV (separador ";").
 pub fn export_diary_csv(db: &Db) -> rusqlite::Result<String> {
-    let names: std::collections::HashMap<i64, String> =
-        db.habits()?.into_iter().map(|h| (h.id, h.name)).collect();
-    let mut out = String::from("habito;data;recaida;dinheiro;minutos;nota\n");
+    let habits = db.habits()?;
+    let mut rule_names = std::collections::HashMap::<i64, String>::new();
+    for h in &habits {
+        for r in db.rules(h.id)? {
+            rule_names.insert(r.id, format!("{}: {}", r.kind.label(), r.text));
+        }
+    }
+    let names: std::collections::HashMap<i64, String> = habits.into_iter().map(|h| (h.id, h.name)).collect();
+    let mut out = String::from("habito;data;recaida;dinheiro;minutos;regra;nota\n");
     for e in db.all_entries()? {
         let date = chrono::DateTime::from_timestamp_millis(e.occurred_at)
             .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
@@ -322,6 +361,7 @@ pub fn export_diary_csv(db: &Db) -> rusqlite::Result<String> {
             if e.is_reset { "sim".into() } else { "nao".into() },
             format!("{:.2}", e.money_spent),
             format!("{:.1}", e.time_spent_ms as f64 / 60_000.0),
+            csv(e.rule_id.and_then(|id| rule_names.get(&id)).map(String::as_str).unwrap_or("")),
             csv(e.note.as_deref().unwrap_or("")),
         ];
         out.push_str(&fields.join(";"));
@@ -438,6 +478,14 @@ mod tests {
         .unwrap();
         db.insert_text_item(TextTable::Reason, id, "Saúde").unwrap();
         db.set_setting("currency", "EUR").unwrap();
+        let allowed = db.insert_rule(id, RuleKind::Allowed, "Adesivo de nicotina").unwrap();
+        db.insert_rule(id, RuleKind::Forbidden, "Cigarro").unwrap();
+        db.insert_entry(&DiaryEntry {
+            is_reset: false,
+            rule_id: Some(allowed),
+            ..DiaryEntry::reset(id, BASE + 3 * MS_PER_DAY)
+        })
+        .unwrap();
 
         let text = serde_json::to_string(&export_backup(&db, "teste").unwrap()).unwrap();
         let json: Value = serde_json::from_str(&text).unwrap();
@@ -452,7 +500,18 @@ mod tests {
         assert_eq!(h2.color, 1001);
         assert_eq!(h2.daily_money, 12.5);
         assert_eq!(h2.counter_style, CounterStyle::WeeksDays);
-        assert_eq!(other.entries(h2.id).unwrap()[0].note.as_deref(), Some("festa"));
+        let entries2 = other.entries(h2.id).unwrap();
+        assert_eq!(entries2.len(), 2);
+        assert!(entries2.iter().any(|e| e.note.as_deref() == Some("festa")));
+
+        assert_eq!(summary.rules, 2);
+        let rules2 = other.rules(h2.id).unwrap();
+        assert_eq!(rules2.len(), 2);
+        let allowed2 = rules2.iter().find(|r| r.kind == RuleKind::Allowed).unwrap();
+        assert_eq!(allowed2.text, "Adesivo de nicotina");
+        let linked = entries2.iter().find(|e| e.rule_id.is_some()).unwrap();
+        assert_eq!(linked.rule_id, Some(allowed2.id));
+        assert!(!linked.is_reset);
 
         let goals = other.goals(h2.id).unwrap();
         assert_eq!(goals.len(), goal_presets().len() + 1);
@@ -553,9 +612,15 @@ mod tests {
         .unwrap();
         let out = export_diary_csv(&db).unwrap();
         let lines: Vec<&str> = out.trim_end().lines().collect();
-        assert_eq!(lines[0], "habito;data;recaida;dinheiro;minutos;nota");
+        assert_eq!(lines[0], "habito;data;recaida;dinheiro;minutos;regra;nota");
         assert!(lines[1].starts_with("Café;"));
         assert!(lines[1].ends_with("\"com \"\"aspas\"\"; e ponto e vírgula\""));
-        assert!(lines[1].contains(";sim;4.50;0.0;"));
+        assert!(lines[1].contains(";sim;4.50;0.0;;"));
+
+        let rule = db.insert_rule(id, RuleKind::Allowed, "Café descafeinado").unwrap();
+        db.insert_entry(&DiaryEntry { is_reset: false, rule_id: Some(rule), ..DiaryEntry::reset(id, BASE + 2 * MS_PER_DAY) })
+            .unwrap();
+        let out = export_diary_csv(&db).unwrap();
+        assert!(out.contains(";nao;0.00;0.0;Permitido: Café descafeinado;"));
     }
 }

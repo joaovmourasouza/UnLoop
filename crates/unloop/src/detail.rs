@@ -9,7 +9,8 @@ use unloop_core::calc::{
 };
 use unloop_core::db::TextTable;
 use unloop_core::format::{format_compact, format_money};
-use unloop_core::model::{color, DiaryEntry, Goal, Reward, TextItem, TimeInvestment, Trophy};
+use unloop_core::model::{color, DiaryEntry, Goal, Reward, RuleKind, TextItem, TimeInvestment, Trophy};
+use unloop_core::presets::rule_suggestions;
 use unloop_core::units::{MS_PER_DAY, MS_PER_MINUTE};
 
 use crate::app::Shared;
@@ -18,13 +19,14 @@ use crate::{entry, habit_form};
 
 struct Tabs {
     overview: gtk::Box,
+    rules: gtk::Box,
     diary: gtk::Box,
     goals: gtk::Box,
     stats: gtk::Box,
     trophies: gtk::Box,
     incentives: gtk::Box,
     motivation: gtk::Box,
-    /// 0 = todas, 1 = recaídas, 2 = com notas
+    /// 0 = todas, 1 = recaídas, 2 = permitidos, 3 = com notas
     diary_filter: Cell<u32>,
 }
 
@@ -38,6 +40,7 @@ pub fn page(ctx: &Shared, habit_id: i64) -> adw::NavigationPage {
     };
     let tabs = Rc::new(Tabs {
         overview: make("overview", "Visão geral", "alarm-symbolic"),
+        rules: make("rules", "Regras", "object-select-symbolic"),
         diary: make("diary", "Diário", "document-edit-symbolic"),
         goals: make("goals", "Metas", "emblem-ok-symbolic"),
         stats: make("stats", "Estatísticas", "view-list-symbolic"),
@@ -55,11 +58,26 @@ pub fn page(ctx: &Shared, habit_id: i64) -> adw::NavigationPage {
     header.pack_end(&build_more_menu(ctx, habit_id));
     header.pack_end(&edit);
 
+    let switcher_bar = adw::ViewSwitcherBar::builder().stack(&stack).build();
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
+    toolbar.add_bottom_bar(&switcher_bar);
     toolbar.set_content(Some(&stack));
 
-    let page = adw::NavigationPage::builder().title("Hábito").child(&toolbar).build();
+    // Janela estreita: abas vão para a barra inferior.
+    let bin = adw::BreakpointBin::builder()
+        .width_request(360)
+        .height_request(300)
+        .child(&toolbar)
+        .build();
+    if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 1000sp") {
+        let breakpoint = adw::Breakpoint::new(condition);
+        breakpoint.add_setter(&switcher, "visible", Some(&false.to_value()));
+        breakpoint.add_setter(&switcher_bar, "reveal", Some(&true.to_value()));
+        bin.add_breakpoint(breakpoint);
+    }
+
+    let page = adw::NavigationPage::builder().title("Hábito").child(&bin).build();
 
     let c = ctx.clone();
     edit.connect_clicked(move |_| {
@@ -129,10 +147,20 @@ fn rebuild(ctx: &Shared, habit_id: i64, tabs: &Rc<Tabs>, page: &adw::NavigationP
     let Some(bundle) = ctx.check(ctx.db.bundle(habit_id)).flatten() else { return false };
     page.set_title(&bundle.habit.name);
     let snap = bundle.snapshot(unloop_core::now_ms());
-    for b in [&tabs.overview, &tabs.diary, &tabs.goals, &tabs.stats, &tabs.trophies, &tabs.incentives, &tabs.motivation] {
+    for b in [
+        &tabs.overview,
+        &tabs.rules,
+        &tabs.diary,
+        &tabs.goals,
+        &tabs.stats,
+        &tabs.trophies,
+        &tabs.incentives,
+        &tabs.motivation,
+    ] {
         widgets::clear_box(b);
     }
     overview(ctx, &bundle, &tabs.overview);
+    rules_tab(ctx, &bundle, &tabs.rules);
     diary(ctx, &bundle, tabs);
     goals(ctx, &bundle, &snap, &tabs.goals);
     stats(ctx, &bundle, &snap, &tabs.stats);
@@ -223,12 +251,136 @@ fn overview(ctx: &Shared, bundle: &HabitBundle, b: &gtk::Box) {
     });
 }
 
+// ------------------------------------------------------------------ Regras
+
+fn rules_tab(ctx: &Shared, bundle: &HabitBundle, b: &gtk::Box) {
+    let habit_id = bundle.habit.id;
+    let intro = widgets::label(
+        "Defina o que mantém a sequência e o que a reinicia. Ao registrar algo no diário, \
+         escolha a regra: o app decide sozinho se o contador reinicia.",
+        &["dim-label"],
+    );
+    b.append(&intro);
+
+    for kind in [RuleKind::Allowed, RuleKind::Forbidden] {
+        let description = match kind {
+            RuleKind::Allowed => "Não reinicia a sequência.",
+            RuleKind::Forbidden => "Reinicia a sequência.",
+        };
+        let group = widgets::group(&format!("{} {}", kind.emoji(), kind.label()), Some(description));
+
+        let add = widgets::icon_button("list-add-symbolic", "Adicionar regra");
+        let c = ctx.clone();
+        add.connect_clicked(move |_| {
+            let c2 = c.clone();
+            let (heading, placeholder) = match kind {
+                RuleKind::Allowed => ("O que é permitido?", "Ex.: refrigerante sem açúcar"),
+                RuleKind::Forbidden => ("O que não é permitido?", "Ex.: refrigerante comum"),
+            };
+            widgets::ask_text(&c, heading, "", placeholder, move |text| {
+                if c2.check(c2.db.insert_rule(habit_id, kind, &text)).is_some() {
+                    c2.changed();
+                }
+            });
+        });
+        group.set_header_suffix(Some(&add));
+
+        let rules: Vec<_> = bundle.rules.iter().filter(|r| r.kind == kind).collect();
+        if rules.is_empty() {
+            let empty = adw::ActionRow::builder()
+                .title("Nada definido ainda")
+                .subtitle("Use o botão + para adicionar.")
+                .build();
+            empty.add_css_class("dim-label");
+            group.add(&empty);
+        } else {
+            let list = widgets::boxed_list();
+            for rule in rules {
+                let used = bundle.rule_usage(rule.id);
+                let row = adw::ActionRow::builder()
+                    .title(esc(&rule.text))
+                    .title_lines(0)
+                    .activatable(true)
+                    .build();
+                if used > 0 {
+                    row.set_subtitle(&format!("Registrado {used} vez(es) no diário"));
+                }
+                row.add_prefix(&gtk::Label::new(Some(kind.emoji())));
+
+                let (c, id, text) = (ctx.clone(), rule.id, rule.text.clone());
+                row.connect_activated(move |_| {
+                    let c2 = c.clone();
+                    widgets::ask_text(&c, "Editar regra", &text, "", move |new_text| {
+                        if c2.check(c2.db.update_rule(id, &new_text)).is_some() {
+                            c2.changed();
+                        }
+                    });
+                });
+
+                let delete = widgets::icon_button("user-trash-symbolic", "Apagar regra");
+                let (c, id) = (ctx.clone(), rule.id);
+                delete.connect_clicked(move |_| {
+                    let c2 = c.clone();
+                    widgets::confirm(
+                        &c,
+                        "Apagar regra?",
+                        "As entradas do diário que citam esta regra continuam lá, só sem o vínculo.",
+                        "Apagar",
+                        true,
+                        move || {
+                            if c2.check(c2.db.delete_rule(id)).is_some() {
+                                c2.changed();
+                            }
+                        },
+                    );
+                });
+                row.add_suffix(&delete);
+                list.append(&row);
+            }
+            group.add(&list);
+        }
+        b.append(&group);
+    }
+
+    // Sugestões ainda não adicionadas.
+    let (allowed, forbidden) = rule_suggestions(bundle.habit.icon);
+    let existing: Vec<String> = bundle.rules.iter().map(|r| r.text.to_lowercase()).collect();
+    let pending: Vec<(RuleKind, &str)> = allowed
+        .iter()
+        .map(|t| (RuleKind::Allowed, *t))
+        .chain(forbidden.iter().map(|t| (RuleKind::Forbidden, *t)))
+        .filter(|(_, t)| !existing.contains(&t.to_lowercase()))
+        .collect();
+    if !pending.is_empty() {
+        let group = widgets::group("Sugestões para este hábito", Some("Clique para adicionar. Ajuste ao que faz sentido para você."));
+        let flow = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .max_children_per_line(3)
+            .min_children_per_line(1)
+            .column_spacing(6)
+            .row_spacing(6)
+            .build();
+        for (kind, text) in pending {
+            let button = gtk::Button::with_label(&format!("{} {}", kind.emoji(), text));
+            let c = ctx.clone();
+            button.connect_clicked(move |_| {
+                if c.check(c.db.insert_rule(habit_id, kind, text)).is_some() {
+                    c.changed();
+                }
+            });
+            flow.append(&button);
+        }
+        group.add(&flow);
+        b.append(&group);
+    }
+}
+
 // ------------------------------------------------------------------ Diário
 
 fn diary(ctx: &Shared, bundle: &HabitBundle, tabs: &Rc<Tabs>) {
     let b = &tabs.diary;
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let filter = gtk::DropDown::from_strings(&["Todas", "Recaídas", "Com notas"]);
+    let filter = gtk::DropDown::from_strings(&["Todas", "Recaídas", "Permitidos", "Com notas"]);
     filter.set_selected(tabs.diary_filter.get());
     let (wt, c) = (Rc::downgrade(tabs), ctx.clone());
     filter.connect_selected_notify(move |dd| {
@@ -254,7 +406,8 @@ fn diary(ctx: &Shared, bundle: &HabitBundle, tabs: &Rc<Tabs>) {
         .iter()
         .filter(|e| match mode {
             1 => e.is_reset,
-            2 => e.has_note(),
+            2 => bundle.rule(e.rule_id).is_some_and(|r| r.kind == RuleKind::Allowed),
+            3 => e.has_note(),
             _ => true,
         })
         .collect();
@@ -272,9 +425,13 @@ fn diary(ctx: &Shared, bundle: &HabitBundle, tabs: &Rc<Tabs>) {
     let currency = ctx.currency();
     let list = widgets::boxed_list();
     for e in entries {
+        let rule = bundle.rule(e.rule_id);
         let mut parts: Vec<String> = Vec::new();
         if e.is_reset {
             parts.push("Recaída".into());
+        }
+        if let Some(r) = rule {
+            parts.push(format!("{} {}", r.kind.emoji(), r.text));
         }
         if e.money_spent > 0.0 {
             parts.push(format_money(e.money_spent, &currency));
@@ -291,7 +448,12 @@ fn diary(ctx: &Shared, bundle: &HabitBundle, tabs: &Rc<Tabs>) {
             .subtitle_lines(3)
             .activatable(true)
             .build();
-        row.add_prefix(&gtk::Label::new(Some(if e.is_reset { "🔁" } else { "📝" })));
+        let prefix = match rule {
+            Some(r) if r.kind == RuleKind::Allowed => "✅",
+            _ if e.is_reset => "🔁",
+            _ => "📝",
+        };
+        row.add_prefix(&gtk::Label::new(Some(prefix)));
 
         let delete = widgets::icon_button("user-trash-symbolic", "Apagar");
         let (c, entry_id, was_reset) = (ctx.clone(), e.id, e.is_reset);

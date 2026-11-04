@@ -91,6 +91,26 @@ coded_enum!(Trophy, default = DecisionMade, {
     Day3650 = (12, "DAY_3650", "10 anos"),
 });
 
+// Regras do hábito: o que é permitido (não reinicia) e o que não é (reinicia).
+coded_enum!(RuleKind, default = Forbidden, {
+    Allowed = (0, "ALLOWED", "Permitido"),
+    Forbidden = (1, "FORBIDDEN", "Não permitido"),
+});
+
+impl RuleKind {
+    /// Uma entrada do diário ligada a esta regra reinicia a sequência?
+    pub fn resets_streak(self) -> bool {
+        self == RuleKind::Forbidden
+    }
+
+    pub fn emoji(self) -> &'static str {
+        match self {
+            RuleKind::Allowed => "✅",
+            RuleKind::Forbidden => "⛔",
+        }
+    }
+}
+
 impl Trophy {
     /// Limiar em ms (DAY_180 = 182,5 dias, como no original).
     pub fn ms(self) -> i64 {
@@ -323,6 +343,8 @@ pub struct DiaryEntry {
     pub time_spent_ms: i64,
     pub is_reset: bool,
     pub note: Option<String>,
+    /// Regra (permitido/não permitido) a que a entrada se refere, se houver.
+    pub rule_id: Option<i64>,
 }
 
 impl DiaryEntry {
@@ -335,6 +357,7 @@ impl DiaryEntry {
             time_spent_ms: 0,
             is_reset: true,
             note: None,
+            rule_id: None,
         }
     }
 
@@ -442,6 +465,17 @@ impl TimeInvestment {
             position: 0,
         }
     }
+}
+
+/// Regra do hábito. Ex. (parar com refrigerante): "Refrigerante zero" = permitido,
+/// "Refrigerante comum" = não permitido.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HabitRule {
+    pub id: i64,
+    pub habit_id: i64,
+    pub kind: RuleKind,
+    pub text: String,
+    pub position: i64,
 }
 
 /// Motivo para parar ou afirmação.
