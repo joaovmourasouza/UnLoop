@@ -1,0 +1,13 @@
+[package]
+name = "unloop"
+description = "Rastreador de hábitos offline e privado para GNOME."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+unloop-core = { path = "../unloop-core" }
+gtk = { version = "0.9", package = "gtk4", features = ["v4_12"] }
+adw = { version = "0.7", package = "libadwaita", features = ["v1_5"] }
+serde_json = "1"

@@ -1,0 +1,12 @@
+[package]
+name = "unloop-core"
+description = "Regras de negócio, banco SQLite e backup do UnLoop (sem dependência de GUI)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

@@ -288,17 +288,14 @@ investir      = totalInvestments += singleSessionDuration   (se saldoTempo ≥ s
 
 ## 4. Guia de migração para Linux desktop
 
-### 4.1 Escolha de stack
-- **Flutter (recomendado)**: um único código Dart.
-  - Banco: `drift` + `sqlite3_flutter_libs`. Tipado, com migrações e streams reativos.
-  - Estado: `riverpod`.
-  - Notificações: `flutter_local_notifications` (Linux via D-Bus/libnotify).
-  - Bandeja: `tray_manager`.
-  - Gráficos: `fl_chart`.
-  - Empacotamento: Flatpak/AppImage.
-- **Tauri**: Rust (`rusqlite` + `chrono`) no backend, UI web (Svelte/React). Fica mais leve; a lógica de domínio fica em Rust e é exposta via `#[tauri::command]`. Use se preferir UI web.
+### 4.1 Escolha de stack (decidida: Rust + GTK4/libadwaita, Flatpak)
+- **UI**: GTK4 + libadwaita (`gtk4-rs` 0.9, `libadwaita-rs` 0.7), com a aparência nativa do GNOME (tema, modo escuro e acessibilidade do sistema).
+- **Banco**: `rusqlite` com SQLite embutido (`bundled`).
+- **Empacotamento**: Flatpak sobre `org.gnome.Platform` 47 + extensão `rust-stable`. Sem permissão de rede nem de arquivos; importação e exportação passam pelo portal do seletor de arquivos.
+- **Ícones dos hábitos**: emoji, que dispensam assets e funcionam em qualquer tema. Os códigos numéricos continuam os do Quitzilla.
+- **Workspace em duas crates**: `unloop-core`, Rust puro com as fórmulas da seção 3.5, o banco, o backup e os testes, e `unloop`, a GUI. O núcleo é testável com `cargo test -p unloop-core` sem GTK.
 
-Nos dois casos, mantenha um **módulo de domínio puro** (sem I/O) com as fórmulas da seção 3.5 e cubra-o com testes unitários. É a parte mais valiosa e mais fácil de testar.
+Alternativas consideradas: Flutter (UI Material, sem a aparência do GNOME), Tauri (UI web) e Python + GTK (mais lento).
 
 ### 4.2 Camadas
 ```
@@ -315,7 +312,7 @@ platform/      notificações, tray, autostart (~/.config/autostart/*.desktop), 
 - **Widgets** → ícone de bandeja com tooltip "12d 4h" e/ou notificação persistente. Extensão do GNOME/KDE só se quiser ir além.
 - **Biometria** → senha opcional (Argon2) e, opcionalmente, banco cifrado com SQLCipher.
 - **Backup** → export/import JSON (compatível com o formato da seção 3.6) e export CSV. Backup automático rotativo em `~/.local/share/unloop/backups/` é opcional.
-- **Moeda e locale**: `intl` (Flutter) ou ICU. Estilos de contador conforme a tabela da seção 3.3.
+- **Moeda e locale**: formatação pt-BR própria em `unloop-core/src/format.rs`; datas locais via `glib::DateTime`. Estilos de contador conforme a tabela da seção 3.3.
 
 ### 4.3 Esquema proposto
 O DDL completo está em [`schema.sql`](schema.sql). Diferenças em relação ao original:

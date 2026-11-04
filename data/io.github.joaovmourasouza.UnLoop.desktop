@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=UnLoop
+GenericName=Rastreador de hábitos
+GenericName[en]=Habit Tracker
+Comment=Acompanhe o tempo longe de um mau hábito, metas, troféus e quanto você economiza
+Comment[en]=Track time away from a bad habit, goals, trophies and how much you save
+Exec=unloop
+Icon=io.github.joaovmourasouza.UnLoop
+Terminal=false
+Categories=Utility;GTK;GNOME;
+Keywords=habit;addiction;quit;streak;sobriety;hábito;vício;parar;sequência;sobriedade;
+StartupNotify=true
+DBusActivatable=false

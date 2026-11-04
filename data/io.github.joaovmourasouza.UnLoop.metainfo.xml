@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.joaovmourasouza.UnLoop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>UnLoop</name>
+  <summary>Break free from bad habits, privately</summary>
+  <summary xml:lang="pt_BR">Livre-se de maus hábitos, com privacidade</summary>
+  <developer id="io.github.joaovmourasouza">
+    <name>João Moura</name>
+  </developer>
+  <description>
+    <p xml:lang="pt_BR">
+      O UnLoop mostra há quanto tempo você está longe de um hábito, registra recaídas
+      e reflexões num diário e transforma o progresso em metas, troféus, dinheiro
+      economizado e tempo recuperado.
+    </p>
+    <p>
+      UnLoop shows how long you have stayed away from a habit, keeps a journal of
+      relapses and reflections, and turns progress into goals, trophies, money saved
+      and time regained.
+    </p>
+    <p>
+      Everything stays on your computer: no account, no cloud, no ads, no tracking.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.joaovmourasouza.UnLoop.desktop</launchable>
+  <url type="homepage">https://github.com/joaovmourasouza/UnLoop</url>
+  <url type="bugtracker">https://github.com/joaovmourasouza/UnLoop/issues</url>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
+  <releases>
+    <release version="0.1.0" date="2026-11-04">
+      <description>
+        <p>Primeira versão: hábitos, diário, metas, troféus, recompensas, investimentos de tempo e backup.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,3 +1,27 @@
+# APKs analisados (não versionar binários de terceiros)
 *.apk
 *.xapk
 *.apks
+
+# Rust
+/target/
+
+# Flatpak
+.flatpak-builder/
+build-dir/
+repo/
+*.flatpak
+
+# IDEs
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Bancos locais de teste
+*.db
+*.db-wal
+*.db-shm

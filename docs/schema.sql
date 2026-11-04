@@ -4,7 +4,7 @@
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 
-CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+-- Versão do esquema: PRAGMA user_version (ver lib/data/database.dart, fonte da verdade).
 
 CREATE TABLE IF NOT EXISTS habit (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
