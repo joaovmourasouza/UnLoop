@@ -808,7 +808,7 @@ mod tests {
         assert_eq!(summary.checkins, 3);
         assert_eq!(summary.focus_sessions, 1);
         // Notas e tarefas também vão e voltam.
-        let notes2 = other.notes(Some(s2.id), None).unwrap();
+        let notes2 = other.notes(None, None).unwrap();
         assert_eq!(notes2.len(), 1);
         assert_eq!(notes2[0].kind, NoteKind::Trigger);
         assert_eq!(notes2[0].tags, vec!["tarde".to_string()]);

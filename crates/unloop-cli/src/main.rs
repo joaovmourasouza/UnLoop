@@ -839,7 +839,12 @@ fn diary_cmd(db: &Db, cmd: DiaryCmd, now: i64, today: NaiveDate) -> Res<Out> {
             }
             let b = bundle(db, &h)?;
             let occurred_at = match at {
-                Some(text) => tasks::parse_due(&text, today).map(|x| x.0).ok_or_else(|| format!("data inválida: {text}"))?,
+                Some(text) => {
+                    let (ms, has_time) =
+                        tasks::parse_due(&text, today).ok_or_else(|| format!("data inválida: {text}"))?;
+                    // Só a data de hoje (sem hora): usa o horário atual em vez do meio-dia.
+                    if !has_time && local_date(ms) == today { now } else { ms }
+                }
                 None => now,
             };
             if occurred_at > now + 60_000 {
