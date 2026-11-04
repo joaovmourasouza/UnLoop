@@ -192,6 +192,8 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
     db.transaction(|| {
         if replace_existing {
             db.delete_all_habits()?;
+            // Sessões de foco não somem junto com os hábitos (ON DELETE SET NULL).
+            db.delete_all_focus()?;
         }
         let mut id_map = std::collections::HashMap::<i64, i64>::new();
         let mut build_ids = std::collections::HashSet::<i64>::new();
@@ -680,6 +682,9 @@ mod tests {
         let summary = import_backup(&other, &json, true).unwrap();
         assert_eq!(summary.checkins, 3);
         assert_eq!(summary.focus_sessions, 1);
+        // Restaurar de novo não duplica o histórico de foco.
+        import_backup(&other, &json, true).unwrap();
+        assert_eq!(other.focus_sessions_since(0).unwrap().len(), 1);
         let mut habits2 = other.habits().unwrap();
         let s2 = habits2.remove(1);
         assert_eq!(s2.daily_target, 50.0);

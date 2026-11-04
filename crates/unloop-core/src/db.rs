@@ -341,6 +341,11 @@ impl Db {
         rows.collect()
     }
 
+    pub fn delete_all_focus(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM focus_session", [])?;
+        Ok(())
+    }
+
     pub fn delete_focus(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM focus_session WHERE id = ?1", [id])?;
         Ok(())
