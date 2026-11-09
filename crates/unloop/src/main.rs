@@ -7,6 +7,7 @@ mod habit_form;
 mod home;
 mod notes;
 mod settings;
+mod shell;
 mod tasks_page;
 mod widgets;
 

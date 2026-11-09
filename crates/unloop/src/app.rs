@@ -11,7 +11,8 @@ use unloop_core::db::Db;
 use unloop_core::model::COLORS;
 use unloop_core::pomodoro::{self, Credit, FocusRecord, Phase, Timer};
 
-use crate::{home, settings, APP_ID, VERSION};
+use crate::shell::{self, Section};
+use crate::{settings, APP_ID, VERSION};
 
 pub type Shared = Rc<Ctx>;
 
@@ -30,6 +31,9 @@ pub struct Ctx {
     pub db_path: PathBuf,
     pub window: adw::ApplicationWindow,
     pub nav: adw::NavigationView,
+    /// Seção escolhida no trilho lateral e os botões do trilho.
+    pub section: Cell<Section>,
+    pub rail: RefCell<Vec<(Section, gtk::Button)>>,
     toasts: adw::ToastOverlay,
     refreshers: RefCell<Vec<Refresher>>,
     tickers: RefCell<Vec<Ticker>>,
@@ -195,14 +199,17 @@ pub fn activate(app: &adw::Application) {
     };
 
     let nav = adw::NavigationView::new();
+    nav.set_hexpand(true);
+    let shell_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    shell_box.append(&nav);
     let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&nav));
+    toasts.set_child(Some(&shell_box));
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("UnLoop")
         .icon_name(APP_ID)
-        .default_width(980)
-        .default_height(760)
+        .default_width(1100)
+        .default_height(780)
         .width_request(360)
         .height_request(480)
         .content(&toasts)
@@ -215,6 +222,8 @@ pub fn activate(app: &adw::Application) {
         db_path,
         window: window.clone(),
         nav: nav.clone(),
+        section: Cell::new(Section::Today),
+        rail: RefCell::new(Vec::new()),
         toasts,
         refreshers: RefCell::new(Vec::new()),
         tickers: RefCell::new(Vec::new()),
@@ -226,7 +235,8 @@ pub fn activate(app: &adw::Application) {
 
     settings::apply_theme(&ctx.setting("theme", "system"));
     setup_actions(app, &ctx);
-    nav.push(&home::page(&ctx));
+    shell_box.prepend(&shell::rail(&ctx));
+    shell::go(&ctx, Section::Today);
 
     let weak = Rc::downgrade(&ctx);
     glib::timeout_add_seconds_local(1, move || match weak.upgrade() {
@@ -250,7 +260,7 @@ pub fn activate(app: &adw::Application) {
 fn setup_actions(app: &adw::Application, ctx: &Shared) {
     let preferences = gio::SimpleAction::new("preferences", None);
     let c = ctx.clone();
-    preferences.connect_activate(move |_, _| c.nav.push(&settings::page(&c)));
+    preferences.connect_activate(move |_, _| shell::go(&c, Section::Settings));
     app.add_action(&preferences);
 
     let about = gio::SimpleAction::new("about", None);
@@ -260,13 +270,23 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
 
     let focus = gio::SimpleAction::new("focus", None);
     let c = ctx.clone();
-    focus.connect_activate(move |_, _| c.nav.push(&crate::focus::page(&c)));
+    focus.connect_activate(move |_, _| shell::go(&c, Section::Focus));
     app.add_action(&focus);
 
     let tasks = gio::SimpleAction::new("tasks", None);
     let c = ctx.clone();
-    tasks.connect_activate(move |_, _| c.nav.push(&crate::tasks_page::page(&c)));
+    tasks.connect_activate(move |_, _| shell::go(&c, Section::Tasks));
     app.add_action(&tasks);
+
+    let today = gio::SimpleAction::new("today", None);
+    let c = ctx.clone();
+    today.connect_activate(move |_, _| shell::go(&c, Section::Today));
+    app.add_action(&today);
+
+    let habits = gio::SimpleAction::new("habits", None);
+    let c = ctx.clone();
+    habits.connect_activate(move |_, _| shell::go(&c, Section::Habits));
+    app.add_action(&habits);
 
     let quit = gio::SimpleAction::new("quit", None);
     let a = app.clone();
@@ -275,8 +295,10 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
 
     app.set_accels_for_action("app.quit", &["<Control>q"]);
     app.set_accels_for_action("app.preferences", &["<Control>comma"]);
-    app.set_accels_for_action("app.focus", &["<Control>f"]);
-    app.set_accels_for_action("app.tasks", &["<Control>t"]);
+    app.set_accels_for_action("app.today", &["<Control>1"]);
+    app.set_accels_for_action("app.tasks", &["<Control>t", "<Control>2"]);
+    app.set_accels_for_action("app.habits", &["<Control>3"]);
+    app.set_accels_for_action("app.focus", &["<Control>f", "<Control>4"]);
 }
 
 fn show_about(ctx: &Shared) {
@@ -314,6 +336,41 @@ fn load_css() {
         .week-day { min-width: 40px; }
         .week-day .mark { font-size: 20px; }
         progressbar.thick trough, progressbar.thick progress { min-height: 10px; border-radius: 5px; }
+
+        /* Trilho lateral (estilo TickTick) */
+        .rail {
+            background-color: shade(@sidebar_bg_color, 0.96);
+            border-right: 1px solid alpha(@window_fg_color, 0.08);
+            padding: 0 6px;
+        }
+        .rail-button {
+            min-width: 60px;
+            padding: 8px 2px;
+            border-radius: 12px;
+            color: alpha(@window_fg_color, 0.65);
+        }
+        .rail-button:hover { color: @window_fg_color; }
+        .rail-button.active {
+            background-color: alpha(@accent_bg_color, 0.16);
+            color: @accent_color;
+        }
+        .rail-label { font-size: 11px; font-weight: 600; }
+        .rail-timer { font-feature-settings: \"tnum\"; }
+
+        /* Coluna de listas das tarefas */
+        .navigation-sidebar row { padding-top: 7px; padding-bottom: 7px; border-radius: 8px; }
+        .sidebar-count { font-size: 12px; opacity: 0.55; font-feature-settings: \"tnum\"; }
+        .sidebar-heading {
+            font-size: 12px; font-weight: 700; opacity: 0.55;
+            margin-top: 12px; margin-left: 4px;
+        }
+        .list-dot { min-width: 10px; min-height: 10px; border-radius: 9999px; margin: 0 3px; }
+
+        /* Cartões de resumo da seção Hoje */
+        .stat-card { padding: 14px 16px; border-radius: 14px; }
+        .stat-card .stat-icon { color: @accent_color; -gtk-icon-size: 18px; }
+        .stat-value { font-size: 26px; font-weight: 800; font-feature-settings: \"tnum\"; }
+
         ",
     );
     for c in COLORS {

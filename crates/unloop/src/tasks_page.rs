@@ -1,90 +1,291 @@
-//! Tarefas: visões (Hoje, 7 dias, Caixa de entrada, Todas, Concluídas) e editor.
+//! Tarefas no estilo TickTick: coluna de listas (Hoje, 7 dias, Caixa de entrada,
+//! Todas, Concluídas e as listas do usuário, com contadores) + tarefas da lista
+//! escolhida. Também o editor de tarefa.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gtk::glib;
 use unloop_core::checkin::{self, local_date};
-use unloop_core::model::{join_tags, parse_tags, Priority, Task, TaskList};
+use unloop_core::model::{color, join_tags, parse_tags, Priority, Task, TaskList};
 use unloop_core::tasks::{self, local_ms, TaskView};
 
 use crate::app::{changed_later, Shared};
 use crate::widgets::{self, esc};
-use crate::focus;
 
 const VIEWS: [TaskView; 5] = [TaskView::Today, TaskView::Next7, TaskView::Inbox, TaskView::All, TaskView::Done];
 
-pub fn page(ctx: &Shared) -> adw::NavigationPage {
-    let stack = adw::ViewStack::new();
-    let mut boxes = Vec::new();
-    for view in VIEWS {
-        let content = widgets::content_box();
-        let icon = match view {
-            TaskView::Today => "alarm-symbolic",
-            TaskView::Next7 => "x-office-calendar-symbolic",
-            TaskView::Inbox => "mail-inbox-symbolic",
-            TaskView::Done => "object-select-symbolic",
-            _ => "view-list-symbolic",
-        };
-        stack
-            .add_titled(&widgets::scroller(&content), Some(view.key()), view.label())
-            .set_icon_name(Some(icon));
-        boxes.push((view, content));
-    }
+/// O que está aberto na coluna de listas.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sel {
+    View(TaskView),
+    List(i64),
+}
 
-    let switcher = adw::ViewSwitcher::builder().stack(&stack).policy(adw::ViewSwitcherPolicy::Wide).build();
+struct State {
+    sel: Cell<Sel>,
+    /// Item de cada linha da coluna (`None` = linha de título, não clicável).
+    rows: RefCell<Vec<Option<Sel>>>,
+}
+
+/// Referências fracas aos widgets que mudam a cada atualização.
+struct Ui {
+    side: glib::WeakRef<gtk::ListBox>,
+    content: glib::WeakRef<gtk::Box>,
+    title: glib::WeakRef<adw::WindowTitle>,
+    manage: glib::WeakRef<gtk::Button>,
+}
+
+fn view_icon(view: TaskView) -> &'static str {
+    match view {
+        TaskView::Today => "weather-clear-symbolic",
+        TaskView::Next7 => "x-office-calendar-symbolic",
+        TaskView::Inbox => "mail-inbox-symbolic",
+        TaskView::Done => "emblem-ok-symbolic",
+        _ => "view-list-symbolic",
+    }
+}
+
+pub fn page(ctx: &Shared) -> adw::NavigationPage {
+    let state = Rc::new(State { sel: Cell::new(Sel::View(TaskView::Today)), rows: RefCell::new(Vec::new()) });
+
+    // Coluna de listas.
+    let side = gtk::ListBox::new();
+    side.add_css_class("navigation-sidebar");
+    side.set_selection_mode(gtk::SelectionMode::Single);
+    let side_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&side)
+        .build();
+    let new_list_inner = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    new_list_inner.append(&gtk::Image::from_icon_name("list-add-symbolic"));
+    new_list_inner.append(&gtk::Label::new(Some("Nova lista")));
+    let new_list = gtk::Button::builder().child(&new_list_inner).build();
+    new_list.add_css_class("flat");
+    new_list.set_margin_start(8);
+    new_list.set_margin_end(8);
+    new_list.set_margin_bottom(8);
+    let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    side_box.append(&side_scroll);
+    side_box.append(&new_list);
+    let side_header = adw::HeaderBar::new();
+    side_header.set_title_widget(Some(&adw::WindowTitle::new("Tarefas", "")));
+    let side_toolbar = adw::ToolbarView::new();
+    side_toolbar.add_top_bar(&side_header);
+    side_toolbar.set_content(Some(&side_box));
+
+    // Conteúdo da lista escolhida.
+    let content = widgets::content_box();
+    let title = adw::WindowTitle::new("", "");
     let header = adw::HeaderBar::new();
-    header.set_title_widget(Some(&switcher));
+    header.set_title_widget(Some(&title));
+    let toggle = gtk::ToggleButton::builder().icon_name("sidebar-show-symbolic").tooltip_text("Mostrar listas").build();
+    header.pack_start(&toggle);
     let add = widgets::icon_button("list-add-symbolic", "Nova tarefa");
     header.pack_start(&add);
-    let new_list = widgets::icon_button("folder-new-symbolic", "Nova lista");
-    header.pack_end(&new_list);
+    let manage = widgets::icon_button("view-more-symbolic", "Renomear ou apagar a lista");
+    header.pack_end(&manage);
+    let main_toolbar = adw::ToolbarView::new();
+    main_toolbar.add_top_bar(&header);
+    main_toolbar.set_content(Some(&widgets::scroller(&content)));
 
-    let switcher_bar = adw::ViewSwitcherBar::builder().stack(&stack).build();
-    let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&header);
-    toolbar.add_bottom_bar(&switcher_bar);
-    toolbar.set_content(Some(&stack));
-    let bin = adw::BreakpointBin::builder().width_request(360).height_request(300).child(&toolbar).build();
-    if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 800sp") {
+    let split = adw::OverlaySplitView::builder()
+        .sidebar(&side_toolbar)
+        .content(&main_toolbar)
+        .min_sidebar_width(220.0)
+        .max_sidebar_width(280.0)
+        .build();
+    split.bind_property("show-sidebar", &toggle, "active").bidirectional().sync_create().build();
+    split.bind_property("collapsed", &toggle, "visible").sync_create().build();
+
+    let bin = adw::BreakpointBin::builder().width_request(360).height_request(300).child(&split).build();
+    if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 640sp") {
         let breakpoint = adw::Breakpoint::new(condition);
-        breakpoint.add_setter(&switcher, "visible", Some(&false.to_value()));
-        breakpoint.add_setter(&switcher_bar, "reveal", Some(&true.to_value()));
+        breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
         bin.add_breakpoint(breakpoint);
     }
     let page = adw::NavigationPage::builder().title("Tarefas").child(&bin).build();
 
-    let c = ctx.clone();
-    add.connect_clicked(move |_| c.nav.push(&editor(&c, None)));
-    let c = ctx.clone();
+    let ui = Rc::new(Ui {
+        side: side.downgrade(),
+        content: content.downgrade(),
+        title: title.downgrade(),
+        manage: manage.downgrade(),
+    });
+
+    // Escolher uma lista na coluna.
+    let (c, st, u, ws) = (ctx.clone(), state.clone(), ui.clone(), split.downgrade());
+    side.connect_row_activated(move |_, row| {
+        let picked = st.rows.borrow().get(row.index().max(0) as usize).copied().flatten();
+        let Some(sel) = picked else { return };
+        st.sel.set(sel);
+        if let Some(split) = ws.upgrade() {
+            if split.is_collapsed() {
+                split.set_show_sidebar(false);
+            }
+        }
+        // Reconstruir depois do sinal: a linha clicada é removida na reconstrução.
+        let (c, st, u) = (c.clone(), st.clone(), u.clone());
+        glib::idle_add_local_once(move || {
+            render(&c, &st, &u);
+        });
+    });
+
+    let (c, st) = (ctx.clone(), state.clone());
+    add.connect_clicked(move |_| {
+        let mut task = Task::new("");
+        match st.sel.get() {
+            Sel::List(id) => task.list_id = Some(id),
+            Sel::View(TaskView::Today | TaskView::Next7) => task.due_at = Some(local_ms(checkin::today(), 12, 0)),
+            Sel::View(_) => {}
+        }
+        c.nav.push(&editor(&c, Some(task)));
+    });
+
+    let (c, st) = (ctx.clone(), state.clone());
     new_list.connect_clicked(move |_| {
-        let c2 = c.clone();
+        let (c2, st2) = (c.clone(), st.clone());
         widgets::ask_text(&c, "Nova lista", "", "Ex.: Trabalho, Casa, Estudos", move |name| {
-            if c2.check(c2.db.insert_task_list(&name, 1003)).is_some() {
+            if let Some(id) = c2.check(c2.db.insert_task_list(&name, 1003)) {
+                st2.sel.set(Sel::List(id));
                 c2.changed();
             }
         });
     });
 
-    let rebuild_all = {
-        let c = ctx.clone();
-        let weak: Vec<(TaskView, gtk::glib::WeakRef<gtk::Box>)> =
-            boxes.iter().map(|(v, b)| (*v, b.downgrade())).collect();
-        move || {
-            let mut alive = false;
-            for (view, w) in &weak {
-                if let Some(b) = w.upgrade() {
-                    alive = true;
-                    widgets::clear_box(&b);
-                    view_content(&c, *view, &b);
-                }
-            }
-            alive
+    let (c, st) = (ctx.clone(), state.clone());
+    manage.connect_clicked(move |_| {
+        let Sel::List(id) = st.sel.get() else { return };
+        let lists = c.check(c.db.task_lists()).unwrap_or_default();
+        if let Some(l) = lists.iter().find(|l| l.id == id) {
+            list_actions(&c, id, &l.name);
         }
-    };
-    rebuild_all();
-    ctx.on_refresh(rebuild_all);
+    });
+
+    render(ctx, &state, &ui);
+    let (c, st, u) = (ctx.clone(), state.clone(), ui.clone());
+    ctx.on_refresh(move || render(&c, &st, &u));
     page
+}
+
+/// Linha da coluna de listas: ícone (ou bolinha de cor), nome e contador.
+fn side_row(icon: Option<&str>, dot_color: Option<i64>, name: &str, count: Option<usize>) -> gtk::ListBoxRow {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    if let Some(icon) = icon {
+        b.append(&gtk::Image::from_icon_name(icon));
+    }
+    if let Some(code) = dot_color {
+        let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        dot.add_css_class("list-dot");
+        dot.add_css_class(&format!("habit-color-{}", color(code).code));
+        dot.set_valign(gtk::Align::Center);
+        dot.set_halign(gtk::Align::Center);
+        b.append(&dot);
+    }
+    let label = gtk::Label::new(Some(name));
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    b.append(&label);
+    if let Some(n) = count.filter(|n| *n > 0) {
+        let count = gtk::Label::new(Some(&n.to_string()));
+        count.add_css_class("sidebar-count");
+        b.append(&count);
+    }
+    gtk::ListBoxRow::builder().child(&b).build()
+}
+
+fn side_heading(text: &str) -> gtk::ListBoxRow {
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.add_css_class("sidebar-heading");
+    gtk::ListBoxRow::builder().child(&label).activatable(false).selectable(false).build()
+}
+
+/// Reconstrói a coluna de listas e o conteúdo. `false` quando a página já foi fechada.
+fn render(ctx: &Shared, state: &State, ui: &Ui) -> bool {
+    let (Some(side), Some(content), Some(title), Some(manage)) =
+        (ui.side.upgrade(), ui.content.upgrade(), ui.title.upgrade(), ui.manage.upgrade())
+    else {
+        return false;
+    };
+    let all = ctx.check(ctx.db.tasks()).unwrap_or_default();
+    let lists = ctx.check(ctx.db.task_lists()).unwrap_or_default();
+    let today = checkin::today();
+    let now = unloop_core::now_ms();
+
+    // Lista apagada (aqui ou pela CLI): volta para a Caixa de entrada.
+    if let Sel::List(id) = state.sel.get() {
+        if !lists.iter().any(|l| l.id == id) {
+            state.sel.set(Sel::View(TaskView::Inbox));
+        }
+    }
+    let sel = state.sel.get();
+
+    // Coluna.
+    side.remove_all();
+    let mut rows = Vec::new();
+    for view in VIEWS {
+        let count = (view != TaskView::Done).then(|| tasks::filter_view(&all, view, today, now).len());
+        side.append(&side_row(Some(view_icon(view)), None, view.label(), count));
+        rows.push(Some(Sel::View(view)));
+    }
+    if !lists.is_empty() {
+        side.append(&side_heading("Listas"));
+        rows.push(None);
+        for l in &lists {
+            let count = all.iter().filter(|t| !t.is_done() && t.list_id == Some(l.id)).count();
+            side.append(&side_row(None, Some(l.color), &l.name, Some(count)));
+            rows.push(Some(Sel::List(l.id)));
+        }
+    }
+    if let Some(i) = rows.iter().position(|r| *r == Some(sel)) {
+        side.select_row(side.row_at_index(i as i32).as_ref());
+    }
+    *state.rows.borrow_mut() = rows;
+
+    // Conteúdo.
+    widgets::clear_box(&content);
+    match sel {
+        Sel::View(view) => {
+            let open = if view == TaskView::Done { 0 } else { tasks::filter_view(&all, view, today, now).len() };
+            title.set_title(view.label());
+            title.set_subtitle(&count_text(open));
+            manage.set_visible(false);
+            view_content(ctx, view, &content);
+        }
+        Sel::List(id) => {
+            let name = lists.iter().find(|l| l.id == id).map_or("", |l| l.name.as_str());
+            let mut open: Vec<&Task> = all.iter().filter(|t| !t.is_done() && t.list_id == Some(id)).collect();
+            tasks::sort_tasks(&mut open);
+            let mut done: Vec<&Task> = all.iter().filter(|t| t.is_done() && t.list_id == Some(id)).collect();
+            done.sort_by(|a, b| b.done_at.cmp(&a.done_at));
+            title.set_title(name);
+            title.set_subtitle(&count_text(open.len()));
+            manage.set_visible(true);
+
+            let add_group = adw::PreferencesGroup::new();
+            add_group.add(&quick_add(ctx, false, Some(id)));
+            content.append(&add_group);
+            section(ctx, &content, "Abertas", &open, &lists, false, false);
+            let shown: Vec<&Task> = done.into_iter().take(20).collect();
+            section(ctx, &content, "Concluídas", &shown, &lists, false, false);
+            if open.is_empty() {
+                empty(&content, "Lista vazia", "Adicione uma tarefa no campo acima.");
+            }
+        }
+    }
+    true
+}
+
+fn count_text(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => "1 tarefa".to_string(),
+        n => format!("{n} tarefas"),
+    }
 }
 
 fn list_name(lists: &[TaskList], id: Option<i64>) -> String {
@@ -147,7 +348,8 @@ pub fn task_row(ctx: &Shared, t: &Task, lists: &[TaskList], show_list: bool) -> 
     row
 }
 
-fn quick_add(ctx: &Shared, view: TaskView) -> adw::EntryRow {
+/// Campo de adição rápida. `due_today`: prazo hoje; `list_id`: lista da tarefa.
+pub fn quick_add(ctx: &Shared, due_today: bool, list_id: Option<i64>) -> adw::EntryRow {
     let entry = adw::EntryRow::builder()
         .title("Adicionar tarefa (Enter para salvar)")
         .show_apply_button(true)
@@ -159,7 +361,8 @@ fn quick_add(ctx: &Shared, view: TaskView) -> adw::EntryRow {
             return;
         }
         let mut task = Task::new(&title);
-        if matches!(view, TaskView::Today | TaskView::Next7) {
+        task.list_id = list_id;
+        if due_today {
             task.due_at = Some(local_ms(checkin::today(), 12, 0));
         }
         if c.check(c.db.insert_task(&task)).is_some() {
@@ -178,7 +381,7 @@ fn view_content(ctx: &Shared, view: TaskView, b: &gtk::Box) {
 
     if view != TaskView::Done {
         let add_group = adw::PreferencesGroup::new();
-        add_group.add(&quick_add(ctx, view));
+        add_group.add(&quick_add(ctx, matches!(view, TaskView::Today | TaskView::Next7), None));
         b.append(&add_group);
     }
 
@@ -325,7 +528,8 @@ fn list_actions(ctx: &Shared, id: i64, name: &str) {
 // ------------------------------------------------------------------ Editor
 
 pub fn editor(ctx: &Shared, task: Option<Task>) -> adw::NavigationPage {
-    let editing = task.is_some();
+    // Tarefa com id 0 = nova, já preenchida (ex.: lista ou prazo da visão aberta).
+    let editing = task.as_ref().is_some_and(|t| t.id != 0);
     let original = task.unwrap_or_else(|| Task::new(""));
     let lists = ctx.check(ctx.db.task_lists()).unwrap_or_default();
     let habits = ctx.check(ctx.db.habits()).unwrap_or_default();
@@ -468,7 +672,7 @@ pub fn editor(ctx: &Shared, task: Option<Task>) -> adw::NavigationPage {
         let (c, id) = (ctx.clone(), original.id);
         focus_button.connect_clicked(move |_| {
             c.timer.borrow_mut().task_id = Some(id);
-            c.nav.push(&focus::page(&c));
+            crate::shell::go(&c, crate::shell::Section::Focus);
         });
         let (c, id) = (ctx.clone(), original.id);
         delete.connect_clicked(move |_| {

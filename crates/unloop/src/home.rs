@@ -1,77 +1,37 @@
-//! Tela inicial: lema, totais, botão de foco e lista de hábitos
-//! (contadores ao vivo para "parar", check do dia para "criar").
+//! Seções "Hoje" (resumo do dia: números, tarefas e hábitos de hoje) e
+//! "Hábitos" (todos os hábitos, contadores ao vivo e totais).
 
 use adw::prelude::*;
-use gtk::gio;
 use unloop_core::calc::HabitBundle;
 use unloop_core::checkin::{self, day_key};
 use unloop_core::format::{format_compact, format_money, format_number};
+use unloop_core::tasks::{self, local_ms, TaskView};
 
 use crate::app::{changed_later, Shared};
+use crate::shell::{self, Section};
 use crate::widgets::{self, esc};
-use crate::{checkin_page, detail, focus, habit_form};
+use crate::{checkin_page, detail, habit_form};
 
-pub fn page(ctx: &Shared) -> adw::NavigationPage {
-    let header = adw::HeaderBar::new();
-    let add = widgets::icon_button("list-add-symbolic", "Novo hábito");
-    header.pack_start(&add);
-
-    let tasks_button = gtk::Button::with_label("✅ Tarefas");
-    tasks_button.set_tooltip_text(Some("Tarefas e listas (Ctrl+T)"));
-    header.pack_start(&tasks_button);
-
-    let focus_button = gtk::Button::with_label("🍅 Foco");
-    focus_button.set_tooltip_text(Some("Pomodoro e estatísticas de foco (Ctrl+F)"));
-    header.pack_start(&focus_button);
-
-    let menu = gio::Menu::new();
-    menu.append(Some("Tarefas"), Some("app.tasks"));
-    menu.append(Some("Foco (Pomodoro)"), Some("app.focus"));
-    menu.append(Some("Configurações"), Some("app.preferences"));
-    menu.append(Some("Sobre o UnLoop"), Some("app.about"));
-    let menu_button = gtk::MenuButton::builder()
-        .icon_name("open-menu-symbolic")
-        .menu_model(&menu)
-        .tooltip_text("Menu principal")
-        .build();
-    header.pack_end(&menu_button);
-
+/// Página-raiz de uma seção: cabeçalho + conteúdo reconstruído a cada mudança.
+fn section_page(
+    ctx: &Shared,
+    title: &str,
+    header: adw::HeaderBar,
+    fill: fn(&Shared, &gtk::Box),
+) -> adw::NavigationPage {
     let content = widgets::content_box();
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&widgets::scroller(&content)));
+    let page = adw::NavigationPage::builder().title(title).child(&toolbar).build();
 
-    let page = adw::NavigationPage::builder().title("UnLoop").tag("home").child(&toolbar).build();
-
-    let c = ctx.clone();
-    add.connect_clicked(move |_| c.nav.push(&habit_form::page(&c, None)));
-    let c = ctx.clone();
-    focus_button.connect_clicked(move |_| c.nav.push(&focus::page(&c)));
-    let c = ctx.clone();
-    tasks_button.connect_clicked(move |_| c.nav.push(&crate::tasks_page::page(&c)));
-
-    // Mostra o tempo do foco em andamento no botão.
-    let (c, weak) = (ctx.clone(), focus_button.downgrade());
-    ctx.live(move |now| {
-        let Some(button) = weak.upgrade() else { return false };
-        let timer = c.timer.borrow();
-        let label = if timer.is_idle() {
-            "🍅 Foco".to_string()
-        } else {
-            let settings = c.pomodoro_settings.borrow();
-            let paused = if timer.is_running() { "" } else { " ⏸" };
-            format!("🍅 {}{paused}", widgets::clock(timer.display_ms(now, &settings)))
-        };
-        button.set_label(&label);
-        true
-    });
-
-    rebuild(ctx, &content);
+    fill(ctx, &content);
     let c = ctx.clone();
     let weak = content.downgrade();
     ctx.on_refresh(move || match weak.upgrade() {
         Some(content) => {
-            rebuild(&c, &content);
+            widgets::clear_box(&content);
+            fill(&c, &content);
             true
         }
         None => false,
@@ -79,17 +39,154 @@ pub fn page(ctx: &Shared) -> adw::NavigationPage {
     page
 }
 
-fn rebuild(ctx: &Shared, content: &gtk::Box) {
-    widgets::clear_box(content);
-    let habits = ctx.check(ctx.db.habits()).unwrap_or_default();
+fn today_subtitle() -> String {
+    let today = checkin::today();
+    let weekday = checkin::WEEKDAY_SHORT[checkin::Datelike::weekday(&today).num_days_from_monday() as usize];
+    format!("{weekday}, {}", today.format("%d/%m/%Y"))
+}
 
-    if habits.is_empty() {
+pub fn page(ctx: &Shared) -> adw::NavigationPage {
+    let header = shell::header("Hoje", &today_subtitle());
+    let add = widgets::icon_button("list-add-symbolic", "Nova tarefa");
+    header.pack_start(&add);
+    let c = ctx.clone();
+    add.connect_clicked(move |_| c.nav.push(&crate::tasks_page::editor(&c, None)));
+    section_page(ctx, "Hoje", header, fill_today)
+}
+
+pub fn habits_page(ctx: &Shared) -> adw::NavigationPage {
+    let header = shell::header("Hábitos", "");
+    let add = widgets::icon_button("list-add-symbolic", "Novo hábito");
+    header.pack_start(&add);
+    let c = ctx.clone();
+    add.connect_clicked(move |_| c.nav.push(&habit_form::page(&c, None)));
+    section_page(ctx, "Hábitos", header, fill_habits)
+}
+
+/// Cartão de número do resumo (estilo TickTick).
+fn stat_card(value: &str, caption: &str, icon: &str) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    card.add_css_class("card");
+    card.add_css_class("stat-card");
+    card.set_hexpand(true);
+    let image = gtk::Image::from_icon_name(icon);
+    image.add_css_class("stat-icon");
+    image.set_halign(gtk::Align::Start);
+    let v = gtk::Label::new(Some(value));
+    v.add_css_class("stat-value");
+    v.set_xalign(0.0);
+    let cap = gtk::Label::new(Some(caption));
+    cap.add_css_class("dim-label");
+    cap.add_css_class("caption");
+    cap.set_xalign(0.0);
+    cap.set_wrap(true);
+    card.append(&image);
+    card.append(&v);
+    card.append(&cap);
+    card
+}
+
+/// Botão "Ver tudo" no cabeçalho de um grupo: abre a seção.
+fn see_all(ctx: &Shared, section: Section) -> gtk::Button {
+    let button = gtk::Button::with_label("Ver tudo");
+    button.add_css_class("flat");
+    button.add_css_class("accent");
+    button.set_valign(gtk::Align::Center);
+    let c = ctx.clone();
+    button.connect_clicked(move |_| shell::go(&c, section));
+    button
+}
+
+fn bundles(ctx: &Shared) -> Vec<HabitBundle> {
+    let habits = ctx.check(ctx.db.habits()).unwrap_or_default();
+    habits.iter().filter_map(|h| ctx.check(ctx.db.bundle(h.id)).flatten()).collect()
+}
+
+fn fill_today(ctx: &Shared, content: &gtk::Box) {
+    let today = checkin::today();
+    let now = unloop_core::now_ms();
+    let all_tasks = ctx.check(ctx.db.tasks()).unwrap_or_default();
+    let lists = ctx.check(ctx.db.task_lists()).unwrap_or_default();
+    let due_today = tasks::filter_view(&all_tasks, TaskView::Today, today, now);
+    let done_today = all_tasks
+        .iter()
+        .filter(|t| t.done_at.is_some_and(|d| checkin::local_date(d) == today))
+        .count();
+    let build: Vec<HabitBundle> = bundles(ctx).into_iter().filter(|b| b.habit.is_build()).collect();
+    let scheduled: Vec<&HabitBundle> = build.iter().filter(|b| b.checkin_stats(today).scheduled_today).collect();
+    let habits_done = scheduled.iter().filter(|b| b.checkin_stats(today).done_today).count();
+    let focus_ms: i64 = ctx
+        .check(ctx.db.focus_sessions_since(local_ms(today, 0, 0)))
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r.duration_ms)
+        .sum();
+
+    // Resumo em cartões.
+    let stats = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .homogeneous(true)
+        .min_children_per_line(2)
+        .max_children_per_line(4)
+        .column_spacing(12)
+        .row_spacing(12)
+        .build();
+    stats.append(&stat_card(&due_today.len().to_string(), "tarefas pendentes", "object-select-symbolic"));
+    stats.append(&stat_card(&done_today.to_string(), "concluídas hoje", "emblem-ok-symbolic"));
+    stats.append(&stat_card(&format!("{habits_done}/{}", scheduled.len()), "hábitos feitos", "starred-symbolic"));
+    stats.append(&stat_card(&format_compact(focus_ms / 60_000), "de foco hoje", "alarm-symbolic"));
+    content.append(&stats);
+
+    let motto = ctx.setting("motto", "");
+    if !motto.is_empty() {
+        content.append(&widgets::label(&motto, &["affirmation", "dim-label"]));
+    }
+
+    // Tarefas de hoje (inclui atrasadas) com adição rápida.
+    let summary = if due_today.is_empty() {
+        "Nada pendente para hoje 🎉".to_string()
+    } else {
+        format!("{} pendentes (inclui atrasadas)", due_today.len())
+    };
+    let group = widgets::group("Tarefas", Some(summary.as_str()));
+    group.set_header_suffix(Some(&see_all(ctx, Section::Tasks)));
+    let list = widgets::boxed_list();
+    list.append(&crate::tasks_page::quick_add(ctx, true, None));
+    for t in &due_today {
+        list.append(&crate::tasks_page::task_row(ctx, t, &lists, true));
+    }
+    group.add(&list);
+    content.append(&group);
+
+    // Hábitos de construir agendados para hoje.
+    let summary = if build.is_empty() {
+        "Nenhum hábito para acompanhar ainda.".to_string()
+    } else if scheduled.is_empty() {
+        "Hoje é folga para todos.".to_string()
+    } else {
+        format!("{habits_done} de {} feitos hoje", scheduled.len())
+    };
+    let group = widgets::group("Hábitos do dia", Some(summary.as_str()));
+    group.set_header_suffix(Some(&see_all(ctx, Section::Habits)));
+    if !scheduled.is_empty() {
+        let list = widgets::boxed_list();
+        for b in &scheduled {
+            list.append(&build_row(ctx, b));
+        }
+        group.add(&list);
+    }
+    content.append(&group);
+}
+
+fn fill_habits(ctx: &Shared, content: &gtk::Box) {
+    let all = bundles(ctx);
+    if all.is_empty() {
         let create = widgets::pill_button("Criar meu primeiro hábito", Some("suggested-action"));
         create.set_halign(gtk::Align::Center);
         let c = ctx.clone();
         create.connect_clicked(move |_| c.nav.push(&habit_form::page(&c, None)));
         let status = adw::StatusPage::builder()
-            .icon_name("emblem-ok-symbolic")
+            .icon_name("starred-symbolic")
             .title("Nenhum hábito ainda")
             .description("Pare com o que te prende ou crie um hábito novo. Tudo fica só neste computador.")
             .child(&create)
@@ -99,38 +196,7 @@ fn rebuild(ctx: &Shared, content: &gtk::Box) {
         return;
     }
 
-    let motto = ctx.setting("motto", "");
-    if !motto.is_empty() {
-        content.append(&widgets::label(&motto, &["title-2"]));
-    }
-
-    // Tarefas de hoje (inclui atrasadas), no máximo 5.
-    let all_tasks = ctx.check(ctx.db.tasks()).unwrap_or_default();
-    let lists = ctx.check(ctx.db.task_lists()).unwrap_or_default();
-    let due_today = unloop_core::tasks::filter_view(
-        &all_tasks,
-        unloop_core::tasks::TaskView::Today,
-        checkin::today(),
-        unloop_core::now_ms(),
-    );
-    if !due_today.is_empty() {
-        let summary = format!("{} para hoje (inclui atrasadas)", due_today.len());
-        let group = widgets::group("Tarefas de hoje", Some(summary.as_str()));
-        let open_all = widgets::icon_button("go-next-symbolic", "Abrir tarefas");
-        let c = ctx.clone();
-        open_all.connect_clicked(move |_| c.nav.push(&crate::tasks_page::page(&c)));
-        group.set_header_suffix(Some(&open_all));
-        let list = widgets::boxed_list();
-        for t in due_today.iter().take(5) {
-            list.append(&crate::tasks_page::task_row(ctx, t, &lists, true));
-        }
-        group.add(&list);
-        content.append(&group);
-    }
-
-    let bundles: Vec<HabitBundle> =
-        habits.iter().filter_map(|h| ctx.check(ctx.db.bundle(h.id)).flatten()).collect();
-    let (build, quit): (Vec<HabitBundle>, Vec<HabitBundle>) = bundles.into_iter().partition(|b| b.habit.is_build());
+    let (build, quit): (Vec<HabitBundle>, Vec<HabitBundle>) = all.into_iter().partition(|b| b.habit.is_build());
 
     if !build.is_empty() {
         let today = checkin::today();
@@ -144,7 +210,7 @@ fn rebuild(ctx: &Shared, content: &gtk::Box) {
             .count();
         let summary =
             if due == 0 { "Hoje é folga para todos.".to_string() } else { format!("{done} de {due} feitos hoje") };
-        let group = widgets::group("Hábitos do dia", Some(summary.as_str()));
+        let group = widgets::group("Construindo", Some(summary.as_str()));
         let list = widgets::boxed_list();
         for b in &build {
             list.append(&build_row(ctx, b));

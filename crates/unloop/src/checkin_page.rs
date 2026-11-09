@@ -14,7 +14,7 @@ use unloop_core::units::MS_PER_DAY;
 
 use crate::app::{changed_later, Shared};
 use crate::widgets::{self, esc};
-use crate::{detail, focus, habit_form};
+use crate::{detail, habit_form};
 
 struct Tabs {
     overview: gtk::Box,
@@ -194,7 +194,7 @@ fn overview(ctx: &Shared, bundle: &HabitBundle, stats: &CheckinStats, today: Nai
     let (c, id) = (ctx.clone(), h.id);
     focus_button.connect_clicked(move |_| {
         c.timer.borrow_mut().habit_id = Some(id);
-        c.nav.push(&focus::page(&c));
+        crate::shell::go(&c, crate::shell::Section::Focus);
     });
     buttons.append(&focus_button);
     b.append(&buttons);
