@@ -46,7 +46,7 @@ build-aux/flatpak/    manifest do Flatpak
 ## Flatpak
 
 ```bash
-flatpak install flathub org.gnome.Sdk//47 org.gnome.Platform//47 org.freedesktop.Sdk.Extension.rust-stable//24.08
+flatpak install flathub org.gnome.Sdk//50 org.gnome.Platform//50 org.freedesktop.Sdk.Extension.rust-stable//25.08
 flatpak install flathub org.flatpak.Builder
 flatpak run org.flatpak.Builder --user --install --force-clean build-dir \
     build-aux/flatpak/io.github.joaovmourasouza.UnLoop.Devel.json

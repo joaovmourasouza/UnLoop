@@ -291,7 +291,7 @@ investir      = totalInvestments += singleSessionDuration   (se saldoTempo ≥ s
 ### 4.1 Escolha de stack (decidida: Rust + GTK4/libadwaita, Flatpak)
 - **UI**: GTK4 + libadwaita (`gtk4-rs` 0.9, `libadwaita-rs` 0.7), com a aparência nativa do GNOME (tema, modo escuro e acessibilidade do sistema).
 - **Banco**: `rusqlite` com SQLite embutido (`bundled`).
-- **Empacotamento**: Flatpak sobre `org.gnome.Platform` 47 + extensão `rust-stable`. Sem permissão de rede nem de arquivos; importação e exportação passam pelo portal do seletor de arquivos.
+- **Empacotamento**: Flatpak sobre `org.gnome.Platform` 50 + extensão `rust-stable`. Sem permissão de rede nem de arquivos; importação e exportação passam pelo portal do seletor de arquivos.
 - **Ícones dos hábitos**: emoji, que dispensam assets e funcionam em qualquer tema. Os códigos numéricos continuam os do Quitzilla.
 - **Workspace em duas crates**: `unloop-core`, Rust puro com as fórmulas da seção 3.5, o banco, o backup e os testes, e `unloop`, a GUI. O núcleo é testável com `cargo test -p unloop-core` sem GTK.
 
