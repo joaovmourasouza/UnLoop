@@ -99,12 +99,16 @@ pub fn avatar(icon_code: i64, color_code: i64, large: bool) -> gtk::Box {
     }
     b.add_css_class(&format!("habit-color-{}", color(color_code).code));
     b.set_valign(gtk::Align::Center);
-    b.set_halign(gtk::Align::Center);
+    // Grande: centralizado no topo das páginas. Pequeno: no início das linhas.
+    b.set_halign(if large { gtk::Align::Center } else { gtk::Align::Start });
+    // Expandir explicitamente como "false" impede que a expansão do rótulo se propague
+    // para a linha (o que empurrava o ícone para o meio e escondia o título).
+    b.set_hexpand(false);
+    b.set_vexpand(false);
     let l = gtk::Label::new(Some(icon(icon_code).emoji));
-    l.set_vexpand(true);
-    l.set_hexpand(true);
     l.set_valign(gtk::Align::Center);
     l.set_halign(gtk::Align::Center);
+    l.set_vexpand(true);
     b.append(&l);
     b
 }

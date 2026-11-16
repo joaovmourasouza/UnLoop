@@ -319,9 +319,9 @@ fn show_about(ctx: &Shared) {
 fn load_css() {
     let mut css = String::from(
         "
-        .avatar { border-radius: 9999px; min-width: 44px; min-height: 44px; }
+        .avatar { border-radius: 12px; min-width: 42px; min-height: 42px; }
         .avatar label { font-size: 22px; }
-        .avatar.large { min-width: 72px; min-height: 72px; }
+        .avatar.large { border-radius: 20px; min-width: 72px; min-height: 72px; }
         .avatar.large label { font-size: 38px; }
         .counter { font-size: 40px; font-weight: 800; font-feature-settings: \"tnum\"; }
         .counter-small { font-size: 18px; font-weight: 700; font-feature-settings: \"tnum\"; }
