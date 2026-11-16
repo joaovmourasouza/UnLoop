@@ -3,6 +3,7 @@ mod checkin_page;
 mod detail;
 mod entry;
 mod focus;
+mod goals_page;
 mod habit_form;
 mod home;
 mod notes;

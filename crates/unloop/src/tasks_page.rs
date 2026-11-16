@@ -533,6 +533,13 @@ pub fn editor(ctx: &Shared, task: Option<Task>) -> adw::NavigationPage {
     let original = task.unwrap_or_else(|| Task::new(""));
     let lists = ctx.check(ctx.db.task_lists()).unwrap_or_default();
     let habits = ctx.check(ctx.db.habits()).unwrap_or_default();
+    // Metas em andamento (e a atual da tarefa, mesmo concluída ou riscada).
+    let goals: Vec<unloop_core::objectives::Objective> = ctx
+        .check(ctx.db.objectives())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|o| o.status == unloop_core::objectives::Status::Open || Some(o.id) == original.objective_id)
+        .collect();
     let due = Rc::new(Cell::new(original.due_at));
     let prefs = adw::PreferencesPage::new();
 
@@ -640,6 +647,16 @@ pub fn editor(ctx: &Shared, task: Option<Task>) -> adw::NavigationPage {
         original.habit_id.and_then(|id| habits.iter().position(|h| h.id == id)).map_or(0, |i| i + 1) as u32,
     );
     link.add(&habit_row);
+    let mut goal_labels = vec!["Nenhuma meta".to_string()];
+    goal_labels.extend(
+        goals.iter().map(|o| format!("[{}] {}", unloop_core::objectives::short_label(o.level, &o.period), o.title)),
+    );
+    let refs: Vec<&str> = goal_labels.iter().map(String::as_str).collect();
+    let goal_row = adw::ComboRow::builder().title("Meta").model(&gtk::StringList::new(&refs)).build();
+    goal_row.set_selected(
+        original.objective_id.and_then(|id| goals.iter().position(|o| o.id == id)).map_or(0, |i| i + 1) as u32,
+    );
+    link.add(&goal_row);
     prefs.add(&link);
 
     // Subtarefas (só depois de salvar)
@@ -714,6 +731,7 @@ pub fn editor(ctx: &Shared, task: Option<Task>) -> adw::NavigationPage {
         t.priority = Priority::from_index(priority_row.selected() as usize);
         t.tags = parse_tags(&tags.text());
         t.habit_id = (habit_row.selected() as usize).checked_sub(1).and_then(|i| habits.get(i)).map(|h| h.id);
+        t.objective_id = (goal_row.selected() as usize).checked_sub(1).and_then(|i| goals.get(i)).map(|o| o.id);
         let timed = has_time.is_active() && due.get().is_some();
         t.due_has_time = timed;
         t.due_at = due.get().map(|ms| if timed { ms } else { local_ms(local_date(ms), 12, 0) });

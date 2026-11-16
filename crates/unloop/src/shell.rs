@@ -14,11 +14,13 @@ pub enum Section {
     Tasks,
     Habits,
     Focus,
+    Goals,
     Settings,
 }
 
 impl Section {
-    pub const MAIN: [Section; 4] = [Section::Today, Section::Tasks, Section::Habits, Section::Focus];
+    // Metas fica depois de Foco: o rótulo do timer usa a posição 3 (Foco).
+    pub const MAIN: [Section; 5] = [Section::Today, Section::Tasks, Section::Habits, Section::Focus, Section::Goals];
 
     fn icon(self) -> &'static str {
         match self {
@@ -26,6 +28,7 @@ impl Section {
             Section::Tasks => "object-select-symbolic",
             Section::Habits => "starred-symbolic",
             Section::Focus => "alarm-symbolic",
+            Section::Goals => "emoji-flags-symbolic",
             Section::Settings => "emblem-system-symbolic",
         }
     }
@@ -36,6 +39,7 @@ impl Section {
             Section::Tasks => "Tarefas",
             Section::Habits => "Hábitos",
             Section::Focus => "Foco",
+            Section::Goals => "Metas",
             Section::Settings => "Ajustes",
         }
     }
@@ -46,6 +50,7 @@ impl Section {
             Section::Tasks => "Tarefas e listas (Ctrl+2 ou Ctrl+T)",
             Section::Habits => "Hábitos (Ctrl+3)",
             Section::Focus => "Foco / Pomodoro (Ctrl+4 ou Ctrl+F)",
+            Section::Goals => "Metas: ano → semestre → trimestre → mês → semana (Ctrl+6)",
             Section::Settings => "Configurações (Ctrl+,)",
         }
     }
@@ -56,6 +61,7 @@ impl Section {
             Section::Tasks => crate::tasks_page::page(ctx),
             Section::Habits => crate::home::habits_page(ctx),
             Section::Focus => crate::focus::page(ctx),
+            Section::Goals => crate::goals_page::page(ctx),
             Section::Settings => crate::settings::page(ctx),
         }
     }

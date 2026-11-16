@@ -673,6 +673,8 @@ pub struct Task {
     pub updated_at: i64,
     /// Hábito relacionado (opcional).
     pub habit_id: Option<i64>,
+    /// Meta (de [`crate::objectives`]) que a tarefa ajuda a cumprir.
+    pub objective_id: Option<i64>,
     pub subtasks: Vec<Subtask>,
 }
 
@@ -692,6 +694,7 @@ impl Task {
             created_at: 0,
             updated_at: 0,
             habit_id: None,
+            objective_id: None,
             subtasks: Vec::new(),
         }
     }

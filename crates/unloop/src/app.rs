@@ -288,6 +288,11 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
     habits.connect_activate(move |_, _| shell::go(&c, Section::Habits));
     app.add_action(&habits);
 
+    let goals = gio::SimpleAction::new("goals", None);
+    let c = ctx.clone();
+    goals.connect_activate(move |_, _| shell::go(&c, Section::Goals));
+    app.add_action(&goals);
+
     let quit = gio::SimpleAction::new("quit", None);
     let a = app.clone();
     quit.connect_activate(move |_, _| a.quit());
@@ -299,6 +304,7 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
     app.set_accels_for_action("app.tasks", &["<Control>t", "<Control>2"]);
     app.set_accels_for_action("app.habits", &["<Control>3"]);
     app.set_accels_for_action("app.focus", &["<Control>f", "<Control>4"]);
+    app.set_accels_for_action("app.goals", &["<Control>6"]);
 }
 
 fn show_about(ctx: &Shared) {

@@ -29,7 +29,7 @@ impl TextTable {
 }
 
 pub struct Db {
-    conn: Connection,
+    pub(crate) conn: Connection,
     tx_depth: Cell<u32>,
 }
 
@@ -48,6 +48,8 @@ impl Db {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         let db = Db { conn, tx_depth: Cell::new(0) };
         db.migrate()?;
+        // Metas não usam número de versão: as tabelas são criadas quando faltam (ver objectives).
+        db.ensure_objectives()?;
         Ok(db)
     }
 
@@ -476,8 +478,8 @@ impl Db {
             let now = crate::now_ms();
             self.conn.execute(
                 "INSERT INTO task (list_id, title, description, due_at, due_has_time, priority, tags, done_at, \
-                 position, created_at, updated_at, habit_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, \
-                 (SELECT COALESCE(MAX(position), -1) + 1 FROM task), ?9, ?10, ?11)",
+                 position, created_at, updated_at, habit_id, objective_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, \
+                 (SELECT COALESCE(MAX(position), -1) + 1 FROM task), ?9, ?10, ?11, ?12)",
                 params![
                     t.list_id,
                     t.title.trim(),
@@ -490,6 +492,7 @@ impl Db {
                     if t.created_at == 0 { now } else { t.created_at },
                     now,
                     t.habit_id,
+                    t.objective_id,
                 ],
             )?;
             let id = self.conn.last_insert_rowid();
@@ -507,7 +510,7 @@ impl Db {
     pub fn update_task(&self, t: &Task) -> Result<()> {
         self.conn.execute(
             "UPDATE task SET list_id = ?1, title = ?2, description = ?3, due_at = ?4, due_has_time = ?5, \
-             priority = ?6, tags = ?7, done_at = ?8, habit_id = ?9, updated_at = ?10 WHERE id = ?11",
+             priority = ?6, tags = ?7, done_at = ?8, habit_id = ?9, updated_at = ?10, objective_id = ?12 WHERE id = ?11",
             params![
                 t.list_id,
                 t.title.trim(),
@@ -520,6 +523,7 @@ impl Db {
                 t.habit_id,
                 crate::now_ms(),
                 t.id,
+                t.objective_id,
             ],
         )?;
         Ok(())
@@ -899,6 +903,7 @@ fn task_from_row(r: &Row) -> Result<Task> {
         created_at: r.get("created_at")?,
         updated_at: r.get("updated_at")?,
         habit_id: r.get("habit_id")?,
+        objective_id: r.get("objective_id")?,
         subtasks: Vec::new(),
     })
 }

@@ -8,6 +8,7 @@ use serde_json::{json, Map, Value};
 use crate::db::{Db, TextTable};
 use crate::format::format_compact;
 use crate::model::*;
+use crate::objectives::{Level, Objective, Status};
 use crate::presets::{preset_by_key, preset_for_duration};
 
 pub const FORMAT_ID: &str = "unloop";
@@ -115,9 +116,21 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
             "id": t.id, "listId": t.list_id, "title": t.title, "description": t.description,
             "dueAt": t.due_at, "dueHasTime": t.due_has_time, "priority": t.priority.legacy(),
             "tags": t.tags, "doneAt": t.done_at, "position": t.position, "createdAt": t.created_at,
-            "habitId": t.habit_id, "subtasks": subtasks,
+            "habitId": t.habit_id, "objectiveId": t.objective_id, "subtasks": subtasks,
         }));
     }
+    let objectives: Vec<Value> = db
+        .objectives()?
+        .iter()
+        .map(|o| {
+            json!({
+                "id": o.id, "parentId": o.parent_id, "level": o.level.key(), "period": o.period,
+                "title": o.title, "description": o.description, "area": o.area, "status": o.status.key(),
+                "statusNote": o.status_note, "position": o.position, "createdAt": o.created_at,
+                "closedAt": o.closed_at, "habitIds": o.habit_ids,
+            })
+        })
+        .collect();
 
     let mut focus_sessions: Vec<Value> = Vec::new();
     for f in db.focus_sessions_since(0)? {
@@ -163,6 +176,7 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         "notes": notes,
         "taskLists": task_lists,
         "tasks": tasks,
+        "objectives": objectives,
         "focusSessions": focus_sessions,
         "settings": {
             "currencyCode": db.setting("currency")?,
@@ -186,6 +200,7 @@ pub struct ImportSummary {
     pub focus_sessions: usize,
     pub notes: usize,
     pub tasks: usize,
+    pub objectives: usize,
     pub from_quitzilla: bool,
 }
 
@@ -194,7 +209,7 @@ impl fmt::Display for ImportSummary {
         write!(
             f,
             "{} hábito(s), {} nota(s), {} tarefa(s), {} check(s), {} sessão(ões) de foco, {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
-             {} investimento(s), {} motivo(s), {} afirmação(ões)",
+             {} investimento(s), {} motivo(s), {} afirmação(ões), {} meta(s) do planejamento",
             self.habits,
             self.notes,
             self.tasks,
@@ -206,7 +221,8 @@ impl fmt::Display for ImportSummary {
             self.rewards,
             self.investments,
             self.reasons,
-            self.affirmations
+            self.affirmations,
+            self.objectives
         )
     }
 }
@@ -230,6 +246,7 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             // Sessões de foco não somem junto com os hábitos (ON DELETE SET NULL).
             db.delete_all_focus()?;
             db.delete_all_tasks()?;
+            db.delete_all_objectives()?;
         }
         let mut id_map = std::collections::HashMap::<i64, i64>::new();
         let mut build_ids = std::collections::HashSet::<i64>::new();
@@ -321,6 +338,36 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             let new_id = db.insert_task_list(&name, int(l, "color").unwrap_or(1003))?;
             list_map.insert(int(l, "id").unwrap_or(0), new_id);
         }
+        // Metas do planejamento (antes das tarefas, para remapear `objectiveId`); mães primeiro.
+        let mut objective_map = std::collections::HashMap::<i64, i64>::new();
+        let mut objectives_json = list(json, "objectives");
+        objectives_json.sort_by_key(|o| {
+            let level = o.get("level").and_then(Value::as_str).and_then(Level::parse).unwrap_or(Level::Year);
+            (level, text(o, "period"), int(o, "position").unwrap_or(0))
+        });
+        for o in objectives_json {
+            let title = text(o, "title");
+            let Some(level) = o.get("level").and_then(Value::as_str).and_then(Level::parse) else { continue };
+            let period = text(o, "period");
+            if title.trim().is_empty() || crate::objectives::period_range(level, &period).is_none() {
+                continue;
+            }
+            let mut obj = Objective::new(level, &period, &title);
+            obj.parent_id = int(o, "parentId").and_then(|old| objective_map.get(&old).copied());
+            obj.description = text(o, "description");
+            obj.area = text(o, "area");
+            obj.status = Status::from_key(&text(o, "status"));
+            obj.status_note = text(o, "statusNote");
+            obj.created_at = int(o, "createdAt").unwrap_or(now);
+            obj.closed_at = int(o, "closedAt");
+            if let Some(Value::Array(ids)) = o.get("habitIds") {
+                obj.habit_ids = ids.iter().filter_map(Value::as_i64).filter_map(|old| id_map.get(&old).copied()).collect();
+            }
+            let new_id = db.insert_objective(&obj)?;
+            objective_map.insert(int(o, "id").unwrap_or(0), new_id);
+            summary.objectives += 1;
+        }
+
         let mut task_map = std::collections::HashMap::<i64, i64>::new();
         let mut tasks_json = list(json, "tasks");
         tasks_json.sort_by_key(|t| int(t, "position").unwrap_or(0));
@@ -339,6 +386,7 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             task.done_at = int(t, "doneAt");
             task.created_at = int(t, "createdAt").unwrap_or(now);
             task.habit_id = map_habit(t);
+            task.objective_id = int(t, "objectiveId").and_then(|old| objective_map.get(&old).copied());
             if let Some(Value::Array(items)) = t.get("subtasks") {
                 for item in items {
                     let title = text(item, "title");
@@ -803,6 +851,14 @@ mod tests {
             Subtask { id: 0, task_id: 0, title: "Ler".into(), done: true, position: 0 },
             Subtask { id: 0, task_id: 0, title: "Resumir".into(), done: false, position: 0 },
         ];
+        let year = db.insert_objective(&Objective::new(Level::Year, "2026", "Curso até ~#085")).unwrap();
+        let mut month = Objective::new(Level::Month, "2026-11", "Fechar o Módulo 2");
+        month.parent_id = Some(year);
+        month.habit_ids = vec![id];
+        month.status = Status::Dropped;
+        month.status_note = "remanejado".into();
+        let month_id = db.insert_objective(&month).unwrap();
+        task.objective_id = Some(month_id);
         let task_id = db.insert_task(&task).unwrap();
         db.insert_focus(&crate::pomodoro::FocusRecord {
             id: 0,
@@ -828,6 +884,16 @@ mod tests {
         let tasks2 = other.tasks().unwrap();
         assert_eq!(tasks2.len(), 1);
         assert_eq!(tasks2[0].priority, Priority::High);
+        // Metas: hierarquia, hábitos, estado e tarefa ligada voltam remapeados.
+        let objs = other.objectives().unwrap();
+        assert_eq!(summary.objectives, 2);
+        let (y2, m2) = (&objs[0], &objs[1]);
+        assert_eq!((y2.level, m2.level), (Level::Year, Level::Month));
+        assert_eq!(m2.parent_id, Some(y2.id));
+        assert_eq!(m2.status, Status::Dropped);
+        assert_eq!(m2.status_note, "remanejado");
+        assert_eq!(m2.habit_ids, vec![other.habits().unwrap()[0].id]);
+        assert_eq!(tasks2[0].objective_id, Some(m2.id));
         assert_eq!(tasks2[0].subtask_progress(), (1, 2));
         assert_eq!(other.task_lists().unwrap()[0].name, "Estudos");
         assert_eq!(tasks2[0].list_id, Some(other.task_lists().unwrap()[0].id));
