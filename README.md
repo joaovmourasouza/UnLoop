@@ -106,6 +106,8 @@ Botão **✅ Tarefas** (Ctrl+T):
 ```bash
 unloop-cli --help
 unloop-cli --json context                    # retrato completo para análise
+unloop-cli habit add "Acordar cedo" --kind build --days seg-sex
+unloop-cli habit add "Cigarro" --since "12/11 22:00" --money 12
 unloop-cli note add "refrigerante" --kind trigger --title "Pós-almoço" --body "Sono e tédio às 14h"
 unloop-cli task add "Relatório" --list Trabalho --due "sex 14:00" --priority high --subtask "Rascunho"
 unloop-cli checkin "leitura" --add 15

@@ -35,6 +35,12 @@ unloop-cli --json context --days 30          # retrato completo: hábitos + esta
 unloop-cli --json habit list
 unloop-cli --json habit show "refrigerante"  # id ou parte do nome
 
+# Criar hábitos (confira antes com `habit list`: nome repetido dá erro, salvo com --force)
+unloop-cli habit add "Cigarro" --since "12/11 22:00" --money 12 --minutes 30     # parar: contador desde a última vez
+unloop-cli habit add "Acordar cedo" --kind build --days seg-sex                  # criar: check diário
+unloop-cli habit add "Leitura" --kind build --target 30 --unit páginas --icon leitura --color azul
+# --days: todos | seg-sex | fds | "seg,qua,sex"; --icon: emoji ou nome ("cigarro"); padrão: deduzido do nome
+
 # Hábitos de parar (contador)
 unloop-cli diary add "refrigerante" --note "vontade forte depois do almoço"          # anotação (não reinicia)
 unloop-cli diary add "refrigerante" --reset --at "hoje 15:30" --money 7 --note "..."  # recaída

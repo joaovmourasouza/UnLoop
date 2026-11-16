@@ -92,6 +92,53 @@ enum HabitCmd {
     List,
     /// Detalhes e estatísticas de um hábito (id ou nome)
     Show { habit: String },
+    /// Cria um hábito: de parar (contador) ou de criar (check diário)
+    #[command(after_help = "Exemplos:\n  \
+        unloop-cli habit add \"Cigarro\" --since \"12/11 22:00\" --money 12 --minutes 30\n  \
+        unloop-cli habit add \"Acordar cedo\" --kind build --days seg-sex\n  \
+        unloop-cli habit add \"Leitura\" --kind build --days todos --target 30 --unit páginas --icon leitura")]
+    Add {
+        name: String,
+        /// quit = parar (contador desde a última vez); build = criar (check diário)
+        #[arg(long, value_enum, default_value = "quit")]
+        kind: HabitKindArg,
+        /// Ícone: emoji, nome ("cigarro", "acordar cedo") ou código. Padrão: deduzido do nome
+        #[arg(long)]
+        icon: Option<String>,
+        /// Cor: nome ("laranja", "azul") ou código. Padrão: verde-azulado
+        #[arg(long)]
+        color: Option<String>,
+        /// Parar: última vez (início do contador). Criar: início da contagem. Padrão: agora
+        #[arg(long)]
+        since: Option<String>,
+        /// Criar: dias programados. Ex.: todos, seg-sex, fds, "seg,qua,sex" (padrão: todos)
+        #[arg(long)]
+        days: Option<String>,
+        /// Criar: meta diária (ex.: 30). Sem meta, é só marcar feito
+        #[arg(long)]
+        target: Option<f64>,
+        /// Criar: unidade da meta (ex.: páginas, min)
+        #[arg(long)]
+        unit: Option<String>,
+        /// Parar: dinheiro gasto por dia com o hábito
+        #[arg(long)]
+        money: Option<f64>,
+        /// Parar: minutos gastos por dia com o hábito
+        #[arg(long)]
+        minutes: Option<f64>,
+        /// Parar: vezes por dia
+        #[arg(long)]
+        per_day: Option<f64>,
+        /// Cria mesmo que já exista um hábito com o mesmo nome
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum HabitKindArg {
+    Quit,
+    Build,
 }
 
 #[derive(Subcommand)]
@@ -814,7 +861,157 @@ fn habit_cmd(db: &Db, cmd: HabitCmd, now: i64, today: NaiveDate, currency: &str)
             }
             out(v, text)
         }
+        HabitCmd::Add { name, kind, icon: icon_arg, color: color_arg, since, days, target, unit, money, minutes, per_day, force } => {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return Err("dê um nome ao hábito".into());
+            }
+            if !force {
+                if let Some(h) = ok(db.habits())?.into_iter().find(|h| h.name.to_lowercase() == name.to_lowercase()) {
+                    return Err(format!("já existe o hábito #{} \"{}\" (use --force para criar outro)", h.id, h.name));
+                }
+            }
+            let build = matches!(kind, HabitKindArg::Build);
+            if build && (money.is_some() || minutes.is_some() || per_day.is_some()) {
+                return Err("--money, --minutes e --per-day são só para hábitos de parar (--kind quit)".into());
+            }
+            if !build && (days.is_some() || target.is_some() || unit.is_some()) {
+                return Err("--days, --target e --unit são só para hábitos de check diário (--kind build)".into());
+            }
+            let start = match since {
+                Some(text) => {
+                    let (ms, has_time) = tasks::parse_due(&text, today).ok_or_else(|| format!("data inválida: {text}"))?;
+                    if !has_time && local_date(ms) == today { now } else { ms }
+                }
+                None => now,
+            };
+            if start > now + 60_000 {
+                return Err("o início não pode estar no futuro".into());
+            }
+            let mut h = Habit::new(name, start.min(now));
+            h.kind = if build { HabitKind::Build } else { HabitKind::Quit };
+            h.icon = match icon_arg {
+                Some(q) => parse_icon(&q).ok_or_else(|| format!("ícone desconhecido: {q}"))?,
+                None => parse_icon(&h.name).unwrap_or(if build { icon_by_legacy("GOAL").code } else { ICONS[0].code }),
+            };
+            h.color = match color_arg {
+                Some(q) => parse_color(&q).ok_or_else(|| format!("cor desconhecida: {q}"))?,
+                None => DEFAULT_COLOR,
+            };
+            if build {
+                h.schedule_days = match days {
+                    Some(d) => parse_days(&d).ok_or_else(|| format!("dias inválidos: {d} (ex.: todos, seg-sex, fds, \"seg,qua,sex\")"))?,
+                    None => checkin::ALL_DAYS,
+                };
+                h.daily_target = target.unwrap_or(0.0).max(0.0);
+                h.target_unit = unit.unwrap_or_default().trim().to_string();
+            } else {
+                h.schedule_days = checkin::ALL_DAYS;
+                h.daily_money = money.unwrap_or(0.0).max(0.0);
+                h.daily_minutes = minutes.unwrap_or(0.0).max(0.0);
+                h.daily_frequency = per_day.unwrap_or(0.0).max(0.0);
+                if h.daily_money == 0.0 && h.daily_minutes > 0.0 {
+                    h.preferred_metric = MetricType::Time;
+                }
+            }
+            let id = ok(db.insert_habit(&h, true))?;
+            let detail = if build {
+                let goal = if h.daily_target > 0.0 {
+                    format!(", meta de {} {}", format_number(h.daily_target), h.target_unit).trim_end().to_string()
+                } else {
+                    String::new()
+                };
+                format!("check diário, {}{goal}", describe_mask(h.schedule_days).to_lowercase())
+            } else {
+                format!("contador desde {}", iso(h.quit_at))
+            };
+            out(
+                json!({ "id": id, "name": h.name, "kind": h.kind.legacy(), "icon": icon(h.icon).emoji, "start": iso(h.quit_at), "scheduleDays": describe_mask(h.schedule_days) }),
+                format!("Hábito #{id} criado: {} {} ({detail}).", icon(h.icon).emoji, h.name),
+            )
+        }
     }
+}
+
+/// Minúsculas e sem acentos, para comparar nomes digitados.
+fn fold(s: &str) -> String {
+    s.trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' => 'a',
+            'é' | 'ê' => 'e',
+            'í' => 'i',
+            'ó' | 'ô' | 'õ' => 'o',
+            'ú' | 'ü' => 'u',
+            'ç' => 'c',
+            '_' | '-' => ' ',
+            c => c,
+        })
+        .collect()
+}
+
+/// Ícone por emoji, código, rótulo ("Cigarro") ou nome legado ("SMOKING").
+/// Também acha o ícone quando um rótulo aparece dentro do texto ("Cigarro de palha" → 🚬).
+fn parse_icon(q: &str) -> Option<i64> {
+    let q = q.trim();
+    if let Ok(code) = q.parse::<i64>() {
+        return ICONS.iter().find(|i| i.code == code).map(|i| i.code);
+    }
+    let strip = |s: &str| s.replace('\u{fe0f}', "");
+    if let Some(i) = ICONS.iter().find(|i| strip(i.emoji) == strip(q)) {
+        return Some(i.code);
+    }
+    let f = fold(q);
+    ICONS
+        .iter()
+        .find(|i| fold(i.label) == f || fold(i.legacy) == f)
+        .or_else(|| ICONS.iter().skip(1).find(|i| f.contains(&fold(i.label))))
+        .map(|i| i.code)
+}
+
+fn parse_color(q: &str) -> Option<i64> {
+    let q = q.trim();
+    if let Ok(code) = q.parse::<i64>() {
+        return COLORS.iter().find(|c| c.code == code).map(|c| c.code);
+    }
+    let f = fold(q);
+    let hex = q.trim_start_matches('#').to_uppercase();
+    COLORS.iter().find(|c| fold(c.label) == f || fold(c.legacy) == f || c.hex == hex).map(|c| c.code)
+}
+
+/// "todos", "uteis"/"seg-sex", "fds", "seg,qua,sex", "sab-dom", "ter-qui"… → máscara (bit 0 = segunda).
+fn parse_days(q: &str) -> Option<u8> {
+    // O intervalo vira "~" antes do fold (que troca "-" por espaço).
+    let f = fold(&q.replace('-', "~").replace(" a ", "~"));
+    match f.as_str() {
+        "todos" | "todos os dias" | "diario" | "all" => return Some(checkin::ALL_DAYS),
+        "uteis" | "dias uteis" | "semana" => return Some(checkin::WEEKDAYS),
+        "fds" | "fim de semana" | "fins de semana" | "sab~dom" => return Some(checkin::WEEKEND),
+        _ => {}
+    }
+    let day = |s: &str| -> Option<usize> {
+        let s = s.trim();
+        ["seg", "ter", "qua", "qui", "sex", "sab", "dom"].iter().position(|d| !s.is_empty() && s.starts_with(d))
+    };
+    let mut mask = 0u8;
+    for part in f.split(|c| c == ',' || c == ' ').filter(|p| !p.trim().is_empty()) {
+        let part = part.trim();
+        if let Some((a, b)) = part.split_once('~') {
+            let (a, b) = (day(a)?, day(b)?);
+            let mut i = a;
+            loop {
+                mask |= 1 << i;
+                if i == b {
+                    break;
+                }
+                i = (i + 1) % 7;
+            }
+        } else {
+            mask |= 1 << day(part)?;
+        }
+    }
+    (mask != 0).then_some(mask)
 }
 
 fn diary_cmd(db: &Db, cmd: DiaryCmd, now: i64, today: NaiveDate) -> Res<Out> {
@@ -1253,5 +1450,40 @@ fn focus_cmd(db: &Db, cmd: FocusCmd, today: NaiveDate) -> Res<Out> {
                 text,
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dias_programados() {
+        assert_eq!(parse_days("todos"), Some(checkin::ALL_DAYS));
+        assert_eq!(parse_days("seg-sex"), Some(checkin::WEEKDAYS));
+        assert_eq!(parse_days("seg a sex"), Some(checkin::WEEKDAYS));
+        assert_eq!(parse_days("úteis"), Some(checkin::WEEKDAYS));
+        assert_eq!(parse_days("fds"), Some(checkin::WEEKEND));
+        assert_eq!(parse_days("sáb-dom"), Some(checkin::WEEKEND));
+        assert_eq!(parse_days("sab,dom"), Some(checkin::WEEKEND));
+        assert_eq!(parse_days("seg,qua,sex"), Some(0b001_0101));
+        assert_eq!(parse_days("sex-seg"), Some(0b111_0001));
+        assert_eq!(parse_days("xyz"), None);
+        assert_eq!(parse_days(""), None);
+    }
+
+    #[test]
+    fn icones_e_cores() {
+        assert_eq!(parse_icon("Cigarro"), Some(2002));
+        assert_eq!(parse_icon("🚬"), Some(2002));
+        assert_eq!(parse_icon("▶"), Some(2018));
+        assert_eq!(parse_icon("acordar cedo"), Some(3001));
+        assert_eq!(parse_icon("SMOKING"), Some(2002));
+        assert_eq!(parse_icon("Cigarro de palha"), Some(2002));
+        assert_eq!(parse_icon("exercicio"), Some(3002));
+        assert_eq!(parse_icon("nada a ver"), None);
+        assert_eq!(parse_color("laranja"), Some(1010));
+        assert_eq!(parse_color("#1E88E5"), Some(1003));
+        assert_eq!(parse_color("azul royal"), Some(1015));
     }
 }
