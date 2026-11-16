@@ -53,6 +53,7 @@ unloop-cli checkin "acordar cedo"                  # marca hoje
 unloop-cli checkin "leitura" --add 15              # soma 15 (páginas) ao dia
 unloop-cli checkin "estudar" --set 50 --date ontem # define o total de um dia
 unloop-cli checkin "acordar cedo" --undo
+unloop-cli checkin "acordar cedo" --missed       # "não feito": quebra a sequência na hora, mesmo hoje
 
 # Notas do hábito: trigger (me leva a fazer), helper (me ajuda), note, insight (análise)
 unloop-cli note add "refrigerante" --kind trigger --title "Pós-almoço" --body "Sono e tédio por volta das 14h." --tags "tarde,trabalho"

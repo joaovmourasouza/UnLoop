@@ -188,9 +188,12 @@ struct CheckinArgs {
     /// Define o total do dia (hábitos com meta)
     #[arg(long, conflicts_with = "undo")]
     set: Option<f64>,
-    /// Desfaz o registro do dia
+    /// Desfaz o registro do dia (check, progresso ou "não feito")
     #[arg(long)]
     undo: bool,
+    /// Marca o dia como "não feito": a sequência quebra na hora, mesmo hoje
+    #[arg(long, conflicts_with_all = ["add", "set", "undo"])]
+    missed: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -625,6 +628,7 @@ fn habit_json(b: &HabitBundle, now: i64, today: NaiveDate, currency: &str) -> Va
             "completionRate": (s.completion_rate() * 1000.0).round() / 10.0,
             "scheduledToday": s.scheduled_today,
             "doneToday": s.done_today,
+            "missedToday": s.missed_today,
             "amountToday": b.amount_on(today),
             "trophies": s.trophies_achieved(),
         });
@@ -838,7 +842,7 @@ fn habit_cmd(db: &Db, cmd: HabitCmd, now: i64, today: NaiveDate, currency: &str)
                 let b = bundle(db, &h)?;
                 let status = if h.is_build() {
                     let s = b.checkin_stats(today);
-                    format!("🔥 {} seguidos{}", s.current_streak, if s.done_today { " · feito hoje" } else { "" })
+                    format!("🔥 {} seguidos{}", s.current_streak, if s.done_today { " · feito hoje" } else if s.missed_today { " · não feito hoje" } else { "" })
                 } else {
                     format_compact(b.snapshot(now).elapsed())
                 };
@@ -1095,8 +1099,17 @@ fn checkin_cmd(db: &Db, args: CheckinArgs, today: NaiveDate) -> Res<Out> {
         return Err("não dá para registrar um dia no futuro".into());
     }
     let key = day_key(day);
+    if args.missed {
+        ok(db.set_missed(h.id, &key, true))?;
+        let note = if checkin::is_scheduled(h.schedule_days, day) { "" } else { " (dia de folga: não muda a sequência)" };
+        return out(
+            json!({ "habitId": h.id, "day": key, "amount": 0.0, "done": false, "missed": true }),
+            format!("{} em {key}: não feito ✗{note}", h.name),
+        );
+    }
     let total = if args.undo {
         ok(db.set_progress(h.id, &key, 0.0))?;
+        ok(db.set_missed(h.id, &key, false))?;
         0.0
     } else if let Some(total) = args.set {
         ok(db.set_progress(h.id, &key, total))?;
@@ -1116,7 +1129,7 @@ fn checkin_cmd(db: &Db, args: CheckinArgs, today: NaiveDate) -> Res<Out> {
     } else {
         format!("{} em {key}: feito ✓", h.name)
     };
-    out(json!({ "habitId": h.id, "day": key, "amount": total, "done": done }), text)
+    out(json!({ "habitId": h.id, "day": key, "amount": total, "done": done, "missed": false }), text)
 }
 
 fn note_cmd(db: &Db, cmd: NoteCmd) -> Res<Out> {

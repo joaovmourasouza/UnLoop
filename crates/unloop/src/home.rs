@@ -272,6 +272,9 @@ fn build_row(ctx: &Shared, bundle: &HabitBundle) -> adw::ActionRow {
     } else if stats.done_today {
         status.push("Feito hoje ✓".to_string());
     }
+    if stats.missed_today {
+        status.push("Não feito hoje ✗".to_string());
+    }
     if !stats.scheduled_today {
         status.push("folga hoje".to_string());
     }
@@ -317,10 +320,34 @@ fn build_row(ctx: &Shared, bundle: &HabitBundle) -> adw::ActionRow {
         });
         row.add_suffix(&check);
     }
+    // "Não fiz hoje": quebra a sequência na hora, em vez de esperar o dia acabar.
+    if stats.scheduled_today || stats.missed_today {
+        row.add_suffix(&miss_toggle(ctx, id, stats.missed_today));
+    }
 
     let c = ctx.clone();
     row.connect_activated(move |_| c.nav.push(&checkin_page::page(&c, id)));
     row
+}
+
+/// Botão ✗ que marca/desmarca hoje como "não feito".
+pub fn miss_toggle(ctx: &Shared, habit_id: i64, missed: bool) -> gtk::ToggleButton {
+    let miss = gtk::ToggleButton::new();
+    miss.set_icon_name("window-close-symbolic");
+    miss.add_css_class("flat");
+    miss.add_css_class("circular");
+    miss.add_css_class("miss-toggle");
+    miss.set_valign(gtk::Align::Center);
+    miss.set_active(missed);
+    miss.set_tooltip_text(Some(if missed { "Desfazer \"não feito\"" } else { "Não fiz hoje (quebra a sequência)" }));
+    let c = ctx.clone();
+    miss.connect_toggled(move |b| {
+        let key = day_key(checkin::today());
+        if c.check(c.db.set_missed(habit_id, &key, b.is_active())).is_some() {
+            changed_later(&c);
+        }
+    });
+    miss
 }
 
 fn quit_row(ctx: &Shared, bundle: HabitBundle) -> adw::ActionRow {

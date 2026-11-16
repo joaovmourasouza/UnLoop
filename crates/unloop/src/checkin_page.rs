@@ -189,6 +189,21 @@ fn overview(ctx: &Shared, bundle: &HabitBundle, stats: &CheckinStats, today: Nai
         toggle.connect_clicked(move |_| edit_day(&c, &habit, today, amount));
         buttons.append(&toggle);
     }
+    if (stats.scheduled_today && !stats.done_today) || stats.missed_today {
+        let miss = if stats.missed_today {
+            widgets::pill_button("✗ Não feito hoje (desfazer)", None)
+        } else {
+            widgets::pill_button("Não fiz hoje", Some("destructive-action"))
+        };
+        miss.set_tooltip_text(Some("Conta hoje como não feito: a sequência quebra agora, sem esperar o dia acabar"));
+        let (c, id, missed) = (ctx.clone(), h.id, stats.missed_today);
+        miss.connect_clicked(move |_| {
+            if c.check(c.db.set_missed(id, &day_key(today), !missed)).is_some() {
+                changed_later(&c);
+            }
+        });
+        buttons.append(&miss);
+    }
     let focus_button = widgets::pill_button("🍅 Iniciar foco", None);
     focus_button.set_tooltip_text(Some("Abre o Pomodoro vinculado a este hábito"));
     let (c, id) = (ctx.clone(), h.id);
@@ -213,7 +228,7 @@ fn overview(ctx: &Shared, bundle: &HabitBundle, stats: &CheckinStats, today: Nai
             "✅"
         } else if !scheduled {
             "–"
-        } else if day == today {
+        } else if day == today && !bundle.missed_on(day) {
             "⏳"
         } else {
             "❌"
@@ -294,13 +309,19 @@ fn history(ctx: &Shared, bundle: &HabitBundle, today: NaiveDate, b: &gtk::Box) {
             } else if amount > 0.0 {
                 button.add_css_class("partial");
             }
+            let missed = bundle.missed_on(day);
+            if missed {
+                button.add_css_class("missed");
+            }
             if !is_scheduled(h.schedule_days, day) {
                 button.add_css_class("off");
             }
             if day == today {
                 button.add_css_class("accent");
             }
-            let tooltip = if h.has_target() {
+            let tooltip = if missed {
+                format!("{} — não feito", day.format("%d/%m/%Y"))
+            } else if h.has_target() {
                 format!("{} — {}", day.format("%d/%m/%Y"), target_text(h, amount))
             } else {
                 day.format("%d/%m/%Y").to_string()

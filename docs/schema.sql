@@ -121,6 +121,14 @@ CREATE TABLE IF NOT EXISTS checkin (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (habit_id, day)
 );
+-- v5: dias marcados como "não feito" (quebram a sequência, inclusive hoje).
+-- Marcar apaga o progresso do dia; registrar progresso apaga a marca.
+CREATE TABLE IF NOT EXISTS checkin_miss (
+    habit_id   INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    day        TEXT    NOT NULL,                 -- AAAA-MM-DD (data local)
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (habit_id, day)
+);
 CREATE TABLE IF NOT EXISTS focus_session (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     habit_id    INTEGER REFERENCES habit(id) ON DELETE SET NULL,

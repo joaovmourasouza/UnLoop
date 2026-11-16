@@ -42,10 +42,14 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         (vec![], vec![], vec![], vec![], vec![], vec![]);
     let mut rules = vec![];
     let mut checkins = vec![];
+    let mut misses = vec![];
 
     for h in &habits {
         for p in db.checkins(h.id)? {
             checkins.push(json!({ "habitId": h.id, "day": p.day, "amount": p.amount }));
+        }
+        for day in db.misses(h.id)? {
+            misses.push(json!({ "habitId": h.id, "day": day }));
         }
         for r in db.rules(h.id)? {
             rules.push(json!({
@@ -155,6 +159,7 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         "affirmations": affirmations,
         "rules": rules,
         "checkins": checkins,
+        "checkinMisses": misses,
         "notes": notes,
         "taskLists": task_lists,
         "tasks": tasks,
@@ -275,6 +280,13 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             };
             db.set_progress(hid, &crate::checkin::day_key(day), amount)?;
             summary.checkins += 1;
+        }
+        for c in list(json, "checkinMisses") {
+            let Some(hid) = map_habit(c) else { continue };
+            let Some(day) = c.get("day").and_then(Value::as_str).and_then(crate::checkin::parse_day) else {
+                continue;
+            };
+            db.set_missed(hid, &crate::checkin::day_key(day), true)?;
         }
 
         // Notas dos hábitos.
@@ -773,6 +785,7 @@ mod tests {
         let id = db.insert_habit(&h, true).unwrap();
         db.set_checkin(id, "2025-01-06", true).unwrap();
         db.set_checkin(id, "2025-01-07", true).unwrap();
+        db.set_missed(id, "2025-01-08", true).unwrap();
         let mut study = Habit::new("Estudar", BASE);
         study.kind = HabitKind::Build;
         study.daily_target = 50.0;
@@ -835,6 +848,7 @@ mod tests {
         assert_eq!(h2.schedule_days, crate::checkin::WEEKDAYS);
         let days: Vec<String> = other.checkins(h2.id).unwrap().into_iter().map(|p| p.day).collect();
         assert_eq!(days, vec!["2025-01-06".to_string(), "2025-01-07".to_string()]);
+        assert_eq!(other.misses(h2.id).unwrap(), vec!["2025-01-08".to_string()]);
         assert!(other.goals(h2.id).unwrap().is_empty());
     }
 

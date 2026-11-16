@@ -5,6 +5,7 @@
 //! - Só os dias programados (máscara de dias da semana) contam para a sequência.
 //! - Dia programado sem check quebra a sequência, exceto hoje (o dia ainda não acabou).
 //! - Check em dia não programado é bônus: entra no total, mas não altera a sequência.
+//! - Dia programado marcado como "não feito" quebra a sequência na hora, inclusive hoje.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -114,6 +115,8 @@ pub struct CheckinStats {
     pub completed_scheduled: u32,
     pub scheduled_today: bool,
     pub done_today: bool,
+    /// Hoje foi marcado como "não feito".
+    pub missed_today: bool,
     /// Código do troféu → dia da conquista.
     pub trophies: BTreeMap<i64, Option<NaiveDate>>,
 }
@@ -141,7 +144,14 @@ pub fn trophy_days(t: Trophy) -> u32 {
     (t.ms() / MS_PER_DAY) as u32
 }
 
-pub fn checkin_stats(start: NaiveDate, mask: u8, checks: &BTreeSet<NaiveDate>, today: NaiveDate) -> CheckinStats {
+/// `missed`: dias marcados como "não feito" (um dia não pode estar nos dois conjuntos; o check vence).
+pub fn checkin_stats(
+    start: NaiveDate,
+    mask: u8,
+    checks: &BTreeSet<NaiveDate>,
+    missed: &BTreeSet<NaiveDate>,
+    today: NaiveDate,
+) -> CheckinStats {
     let mask = if mask == 0 { ALL_DAYS } else { mask };
     let mut stats = CheckinStats {
         current_streak: 0,
@@ -151,6 +161,7 @@ pub fn checkin_stats(start: NaiveDate, mask: u8, checks: &BTreeSet<NaiveDate>, t
         completed_scheduled: 0,
         scheduled_today: is_scheduled(mask, today),
         done_today: checks.contains(&today),
+        missed_today: missed.contains(&today) && !checks.contains(&today),
         trophies: Trophy::ALL.iter().map(|t| (t.code(), None)).collect(),
     };
     if start > today {
@@ -170,7 +181,7 @@ pub fn checkin_stats(start: NaiveDate, mask: u8, checks: &BTreeSet<NaiveDate>, t
                 run += 1;
                 stats.completed_scheduled += 1;
                 stats.scheduled_days += 1;
-            } else if day != today {
+            } else if day != today || missed.contains(&day) {
                 run = 0;
                 stats.scheduled_days += 1;
             }
@@ -235,7 +246,7 @@ mod tests {
 
     #[test]
     fn fim_de_semana_nao_quebra_e_hoje_pendente_nao_quebra() {
-        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8, 9, 10, 13, 14]), d(15));
+        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8, 9, 10, 13, 14]), &BTreeSet::new(), d(15));
         assert_eq!(s.current_streak, 7);
         assert_eq!(s.best_streak, 7);
         assert_eq!(s.scheduled_days, 7);
@@ -252,7 +263,7 @@ mod tests {
 
     #[test]
     fn dia_programado_sem_check_quebra() {
-        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8, 10, 13, 14]), d(15));
+        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8, 10, 13, 14]), &BTreeSet::new(), d(15));
         assert_eq!(s.current_streak, 3);
         assert_eq!(s.best_streak, 3);
         assert_eq!(s.scheduled_days, 7);
@@ -261,7 +272,7 @@ mod tests {
 
     #[test]
     fn check_de_hoje_e_bonus_no_fim_de_semana() {
-        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8, 9, 10, 11, 13, 14, 15]), d(15));
+        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8, 9, 10, 11, 13, 14, 15]), &BTreeSet::new(), d(15));
         assert_eq!(s.current_streak, 8);
         assert_eq!(s.scheduled_days, 8);
         assert_eq!(s.total_checks, 9); // sábado conta como bônus
@@ -270,7 +281,7 @@ mod tests {
 
     #[test]
     fn ontem_sem_check_zera_a_sequencia_atual() {
-        let s = checkin_stats(d(6), ALL_DAYS, &set(&[6, 7, 8]), d(10));
+        let s = checkin_stats(d(6), ALL_DAYS, &set(&[6, 7, 8]), &BTreeSet::new(), d(10));
         assert_eq!(s.current_streak, 0);
         assert_eq!(s.best_streak, 3);
     }
@@ -290,7 +301,7 @@ mod tests {
         assert_eq!(amount_on(&progress, d(7)), 12.0);
         assert_eq!(amount_on(&progress, d(9)), 0.0);
         // Dia 7 não bateu a meta: a sequência quebra.
-        let s = checkin_stats(d(6), ALL_DAYS, &done, d(8));
+        let s = checkin_stats(d(6), ALL_DAYS, &done, &BTreeSet::new(), d(8));
         assert_eq!(s.current_streak, 1);
         assert_eq!(s.best_streak, 1);
         // Sem meta, qualquer registro conta.
@@ -299,8 +310,27 @@ mod tests {
 
     #[test]
     fn inicio_no_futuro() {
-        let s = checkin_stats(d(20), ALL_DAYS, &set(&[]), d(10));
+        let s = checkin_stats(d(20), ALL_DAYS, &set(&[]), &BTreeSet::new(), d(10));
         assert_eq!(s.current_streak, 0);
         assert_eq!(s.trophies_achieved(), 0);
+    }
+
+    #[test]
+    fn nao_feito_hoje_quebra_na_hora() {
+        // Seg a qua feitos; quinta (hoje) pendente mantém a sequência…
+        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8]), &BTreeSet::new(), d(9));
+        assert_eq!(s.current_streak, 3);
+        assert!(!s.missed_today);
+        // …e marcada como "não feito" zera hoje mesmo e conta como dia vencido.
+        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8]), &set(&[9]), d(9));
+        assert_eq!(s.current_streak, 0);
+        assert_eq!(s.best_streak, 3);
+        assert_eq!(s.scheduled_days, 4);
+        assert_eq!(s.completed_scheduled, 3);
+        assert!(s.missed_today);
+        // "Não feito" em dia de folga não altera nada.
+        let s = checkin_stats(d(6), WEEKDAYS, &set(&[6, 7, 8, 9, 10]), &set(&[11]), d(11));
+        assert_eq!(s.current_streak, 5);
+        assert!(s.missed_today);
     }
 }

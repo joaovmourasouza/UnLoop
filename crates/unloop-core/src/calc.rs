@@ -224,6 +224,8 @@ pub struct HabitBundle {
     pub rules: Vec<HabitRule>,
     /// Progresso por dia de hábitos de check diário.
     pub checkins: Vec<crate::model::DayProgress>,
+    /// Dias marcados como "não feito" ("AAAA-MM-DD").
+    pub misses: Vec<String>,
 }
 
 /// Tudo que a UI precisa sobre um hábito num instante.
@@ -276,8 +278,15 @@ impl HabitBundle {
             crate::checkin::local_date(self.habit.quit_at),
             self.habit.schedule_days,
             &crate::checkin::done_days(&self.checkins, self.habit.daily_target),
+            &crate::checkin::parse_days(&self.misses),
             today,
         )
+    }
+
+    /// O dia foi marcado como "não feito"?
+    pub fn missed_on(&self, day: crate::checkin::NaiveDate) -> bool {
+        let key = crate::checkin::day_key(day);
+        self.misses.iter().any(|d| *d == key)
     }
 
     /// Progresso registrado num dia.
@@ -442,6 +451,7 @@ mod tests {
             affirmations: vec![],
             rules: vec![],
             checkins: vec![],
+            misses: vec![],
         };
         let s = bundle.snapshot(day(15.0));
         assert_eq!(s.start, day(12.0));

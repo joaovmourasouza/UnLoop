@@ -332,6 +332,8 @@ fn load_css() {
         .timer { font-size: 64px; font-weight: 800; font-feature-settings: \"tnum\"; }
         .day-cell { min-width: 38px; min-height: 34px; padding: 0; }
         .day-cell.off { opacity: 0.5; }
+        .day-cell.missed { box-shadow: inset 0 0 0 2px alpha(@error_color, 0.8); }
+        .miss-toggle:checked { color: @error_color; background-color: alpha(@error_color, 0.15); }
         .day-cell.partial { box-shadow: inset 0 -3px 0 alpha(@accent_bg_color, 0.7); }
         .week-day { min-width: 40px; }
         .week-day .mark { font-size: 20px; }

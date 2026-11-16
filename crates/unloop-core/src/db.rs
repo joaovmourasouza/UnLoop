@@ -10,7 +10,7 @@ use crate::calc::HabitBundle;
 use crate::model::*;
 use crate::presets::{goal_presets, DEFAULT_AFFIRMATIONS};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Tabelas de texto simples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +69,10 @@ impl Db {
             if current < 4 {
                 self.conn.execute_batch(MIGRATION_V4)?;
             }
-            // Próximas versões: if current < 5 { self.conn.execute_batch(MIGRATION_V5)?; }
+            if current < 5 {
+                self.conn.execute_batch(MIGRATION_V5)?;
+            }
+            // Próximas versões: if current < 6 { self.conn.execute_batch(MIGRATION_V6)?; }
             self.conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
         })
     }
@@ -215,6 +218,7 @@ impl Db {
             affirmations: self.text_items(TextTable::Affirmation, id)?,
             rules: self.rules(id)?,
             checkins: self.checkins(id)?,
+            misses: self.misses(id)?,
             habit,
         }))
     }
@@ -282,6 +286,9 @@ impl Db {
     /// Define o progresso total de um dia (`<= 0` apaga o registro).
     pub fn set_progress(&self, habit_id: i64, day: &str, amount: f64) -> Result<()> {
         if amount > 0.0 && amount.is_finite() {
+            // Registrar progresso tira o "não feito" do dia.
+            self.conn
+                .execute("DELETE FROM checkin_miss WHERE habit_id = ?1 AND day = ?2", params![habit_id, day])?;
             self.conn.execute(
                 "INSERT INTO checkin (habit_id, day, amount, created_at) VALUES (?1, ?2, ?3, ?4) \
                  ON CONFLICT(habit_id, day) DO UPDATE SET amount = excluded.amount",
@@ -313,6 +320,31 @@ impl Db {
     /// Hábito sem meta: marca (`done = true`) ou desmarca um dia.
     pub fn set_checkin(&self, habit_id: i64, day: &str, done: bool) -> Result<()> {
         self.set_progress(habit_id, day, if done { 1.0 } else { 0.0 })
+    }
+
+    /// Dias marcados explicitamente como "não feito" ("AAAA-MM-DD"), em ordem.
+    pub fn misses(&self, habit_id: i64) -> Result<Vec<String>> {
+        let mut st = self.conn.prepare("SELECT day FROM checkin_miss WHERE habit_id = ?1 ORDER BY day")?;
+        let rows = st.query_map([habit_id], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// Marca (`missed = true`) ou desmarca um dia como "não feito". Marcar apaga o progresso do dia.
+    pub fn set_missed(&self, habit_id: i64, day: &str, missed: bool) -> Result<()> {
+        self.transaction(|| {
+            if missed {
+                self.conn
+                    .execute("DELETE FROM checkin WHERE habit_id = ?1 AND day = ?2", params![habit_id, day])?;
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO checkin_miss (habit_id, day, created_at) VALUES (?1, ?2, ?3)",
+                    params![habit_id, day, crate::now_ms()],
+                )?;
+            } else {
+                self.conn
+                    .execute("DELETE FROM checkin_miss WHERE habit_id = ?1 AND day = ?2", params![habit_id, day])?;
+            }
+            Ok(())
+        })
     }
 
     /// Muda quando OUTRA conexão (ex.: a CLI) grava no banco. Usado pelo app para se atualizar.
@@ -1115,6 +1147,16 @@ CREATE INDEX ix_subtask_task ON subtask (task_id);
 ALTER TABLE focus_session ADD COLUMN task_id INTEGER REFERENCES task(id) ON DELETE SET NULL;
 "#;
 
+/// Dias marcados como "não feito" em hábitos de check (quebram a sequência, inclusive hoje).
+const MIGRATION_V5: &str = r#"
+CREATE TABLE checkin_miss (
+    habit_id   INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    day        TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (habit_id, day)
+);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1153,6 +1195,27 @@ mod tests {
         // Apagar o hábito apaga as regras.
         db.delete_habit(id).unwrap();
         assert!(db.rules(id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn nao_feito_e_check_se_excluem() {
+        let db = Db::open_in_memory().unwrap();
+        let mut h = Habit::new("Acordar cedo", 0);
+        h.kind = HabitKind::Build;
+        let id = db.insert_habit(&h, false).unwrap();
+        db.set_checkin(id, "2025-01-06", true).unwrap();
+        db.set_missed(id, "2025-01-06", true).unwrap();
+        db.set_missed(id, "2025-01-06", true).unwrap(); // idempotente
+        assert!(db.checkins(id).unwrap().is_empty(), "marcar não feito apaga o check");
+        assert_eq!(db.misses(id).unwrap(), vec!["2025-01-06".to_string()]);
+        db.add_progress(id, "2025-01-06", 1.0).unwrap();
+        assert!(db.misses(id).unwrap().is_empty(), "registrar progresso apaga o não feito");
+        db.set_missed(id, "2025-01-07", true).unwrap();
+        db.set_missed(id, "2025-01-07", false).unwrap();
+        assert!(db.misses(id).unwrap().is_empty());
+        db.set_missed(id, "2025-01-08", true).unwrap();
+        db.delete_habit(id).unwrap();
+        assert!(db.misses(id).unwrap().is_empty(), "apagar o hábito apaga as marcas");
     }
 
     #[test]
