@@ -5,6 +5,7 @@
 //! - [`format`]: formatação pt-BR de durações e valores.
 //! - [`presets`]: metas padrão, sugestões de hábitos, moedas.
 //! - [`db`]: SQLite com migrações por `PRAGMA user_version`.
+//! - [`finance`]: finanças pessoais (contas, lançamentos, cartões, orçamento, metas).
 //! - [`backup`]: export/import JSON (compatível com o backup do Quitzilla) e CSV.
 
 pub mod analysis;
@@ -12,6 +13,7 @@ pub mod backup;
 pub mod calc;
 pub mod checkin;
 pub mod db;
+pub mod finance;
 pub mod format;
 pub mod model;
 pub mod pomodoro;

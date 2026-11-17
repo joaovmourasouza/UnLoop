@@ -2,6 +2,7 @@ mod app;
 mod checkin_page;
 mod detail;
 mod entry;
+mod finance_page;
 mod focus;
 mod habit_form;
 mod home;

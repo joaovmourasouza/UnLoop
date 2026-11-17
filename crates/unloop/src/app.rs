@@ -182,6 +182,7 @@ pub fn activate(app: &adw::Application) {
     }
 
     load_css();
+    install_icons();
 
     // Dentro do Flatpak: ~/.var/app/<APP_ID>/data/unloop/unloop.db
     let data_dir = glib::user_data_dir().join("unloop");
@@ -288,6 +289,11 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
     habits.connect_activate(move |_, _| shell::go(&c, Section::Habits));
     app.add_action(&habits);
 
+    let finance = gio::SimpleAction::new("finance", None);
+    let c = ctx.clone();
+    finance.connect_activate(move |_, _| shell::go(&c, Section::Finance));
+    app.add_action(&finance);
+
     let quit = gio::SimpleAction::new("quit", None);
     let a = app.clone();
     quit.connect_activate(move |_, _| a.quit());
@@ -299,6 +305,7 @@ fn setup_actions(app: &adw::Application, ctx: &Shared) {
     app.set_accels_for_action("app.tasks", &["<Control>t", "<Control>2"]);
     app.set_accels_for_action("app.habits", &["<Control>3"]);
     app.set_accels_for_action("app.focus", &["<Control>f", "<Control>4"]);
+    app.set_accels_for_action("app.finance", &["<Control>5"]);
 }
 
 fn show_about(ctx: &Shared) {
@@ -314,6 +321,42 @@ fn show_about(ctx: &Shared) {
         .comments("Rastreador de hábitos offline. Seus dados ficam só neste computador: sem conta, sem nuvem, sem anúncios e sem rastreamento.")
         .build()
         .present();
+}
+
+/// Ícones simbólicos próprios (carteira, cartão, pizza, alvo). Gravados no cache
+/// e adicionados ao tema, para seguirem a cor do texto como os do Adwaita.
+fn install_icons() {
+    const ICONS: [(&str, &str); 4] = [
+        (
+            "unloop-wallet-symbolic",
+            "<path d=\"M3 2h10a2 2 0 0 1 2 2v1h-4a3 3 0 0 0 0 6h4v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 5h4v2h-4a1 1 0 0 1 0-2z\"/>",
+        ),
+        (
+            "unloop-card-symbolic",
+            "<path fill-rule=\"evenodd\" d=\"M2 3h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm.5 4.5v4h11v-4zM4 9h3v1.5H4z\"/>",
+        ),
+        (
+            "unloop-pie-symbolic",
+            "<path d=\"M7 1.07A7 7 0 1 0 14.93 9H7z\"/><path d=\"M9 .5V7h6.5A6.5 6.5 0 0 0 9 .5z\"/>",
+        ),
+        (
+            "unloop-target-symbolic",
+            "<path fill-rule=\"evenodd\" d=\"M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 2a5 5 0 1 1 0 10A5 5 0 0 1 8 3zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z\"/>",
+        ),
+    ];
+    let dir = glib::user_cache_dir().join("unloop").join("icons");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    for (name, body) in ICONS {
+        let svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"#2e3436\">{body}</svg>"
+        );
+        let _ = std::fs::write(dir.join(format!("{name}.svg")), svg);
+    }
+    if let Some(display) = gdk::Display::default() {
+        gtk::IconTheme::for_display(&display).add_search_path(&dir);
+    }
 }
 
 fn load_css() {
@@ -372,6 +415,17 @@ fn load_css() {
         .stat-card { padding: 14px 16px; border-radius: 14px; }
         .stat-card .stat-icon { color: @accent_color; -gtk-icon-size: 18px; }
         .stat-value { font-size: 26px; font-weight: 800; font-feature-settings: \"tnum\"; }
+
+        /* Finanças */
+        .fin-amount { font-weight: 700; font-feature-settings: \"tnum\"; }
+        .fin-paid .fin-amount { opacity: 0.6; }
+        .fin-expense { color: @window_fg_color; }
+        .fin-balance { color: @accent_color; }
+        .fin-calendar { padding: 10px; }
+        .fin-day { min-height: 46px; padding: 4px 0; border-radius: 10px; }
+        .fin-day.today { box-shadow: inset 0 0 0 2px alpha(@accent_bg_color, 0.8); }
+        .fin-day.selected { background-color: alpha(@accent_bg_color, 0.18); color: @accent_color; }
+        .fin-mark { font-size: 8px; }
 
         ",
     );

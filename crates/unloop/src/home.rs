@@ -64,7 +64,7 @@ pub fn habits_page(ctx: &Shared) -> adw::NavigationPage {
 }
 
 /// Cartão de número do resumo (estilo TickTick).
-fn stat_card(value: &str, caption: &str, icon: &str) -> gtk::Box {
+pub fn stat_card(value: &str, caption: &str, icon: &str) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 4);
     card.add_css_class("card");
     card.add_css_class("stat-card");

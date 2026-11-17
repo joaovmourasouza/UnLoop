@@ -164,6 +164,7 @@ pub fn export_backup(db: &Db, app_version: &str) -> rusqlite::Result<Value> {
         "taskLists": task_lists,
         "tasks": tasks,
         "focusSessions": focus_sessions,
+        "finance": db.fin_export()?,
         "settings": {
             "currencyCode": db.setting("currency")?,
             "mainTitle": db.setting("motto")?,
@@ -186,6 +187,7 @@ pub struct ImportSummary {
     pub focus_sessions: usize,
     pub notes: usize,
     pub tasks: usize,
+    pub finance_entries: usize,
     pub from_quitzilla: bool,
 }
 
@@ -193,11 +195,12 @@ impl fmt::Display for ImportSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} hábito(s), {} nota(s), {} tarefa(s), {} check(s), {} sessão(ões) de foco, {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
+            "{} hábito(s), {} nota(s), {} tarefa(s), {} lançamento(s) financeiro(s), {} check(s), {} sessão(ões) de foco, {} regra(s), {} entrada(s) no diário, {} meta(s), {} recompensa(s), \
              {} investimento(s), {} motivo(s), {} afirmação(ões)",
             self.habits,
             self.notes,
             self.tasks,
+            self.finance_entries,
             self.checkins,
             self.focus_sessions,
             self.rules,
@@ -215,7 +218,9 @@ impl fmt::Display for ImportSummary {
 /// Com `replace_existing`, apaga todos os hábitos atuais antes.
 pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<ImportSummary, BackupError> {
     let habits = sorted_by_position(list(json, "habits"));
-    if habits.is_empty() {
+    let finance = json.get("finance").filter(|f| f.is_object());
+    let has_other_data = !list(json, "tasks").is_empty() || finance.is_some();
+    if habits.is_empty() && !has_other_data {
         return Err(BackupError::Format("Nenhum hábito encontrado no arquivo.".into()));
     }
     let now = crate::now_ms();
@@ -230,6 +235,13 @@ pub fn import_backup(db: &Db, json: &Value, replace_existing: bool) -> Result<Im
             // Sessões de foco não somem junto com os hábitos (ON DELETE SET NULL).
             db.delete_all_focus()?;
             db.delete_all_tasks()?;
+            // Só troca as finanças quando o arquivo traz finanças (backups antigos não têm).
+            if finance.is_some() {
+                db.fin_delete_all()?;
+            }
+        }
+        if let Some(f) = finance {
+            summary.finance_entries = db.fin_import(f)?;
         }
         let mut id_map = std::collections::HashMap::<i64, i64>::new();
         let mut build_ids = std::collections::HashSet::<i64>::new();
@@ -859,6 +871,33 @@ mod tests {
         let err = import_backup(&db, &json!({ "habits": [] }), true).unwrap_err();
         assert!(matches!(err, BackupError::Format(_)));
         assert_eq!(db.habits().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn financas_vao_e_voltam_no_backup() {
+        use crate::finance::{Entry, Kind, Repeat};
+        let db = Db::open_in_memory().unwrap();
+        db.insert_habit(&Habit::new("Café", BASE), false).unwrap();
+        let acc = db.fin_insert_account("Banco", 50.0, 1003).unwrap();
+        let mut e = Entry::new(Kind::Income, "Salário", 3000.0, "2026-11");
+        e.account_id = Some(acc);
+        e.paid = true;
+        db.fin_add_entry(&e, Repeat::Once).unwrap();
+        let json = export_backup(&db, "test").unwrap();
+
+        // Restaurar substituindo troca as finanças pelas do arquivo.
+        let other = Db::open_in_memory().unwrap();
+        other.fin_insert_account("Antiga", 0.0, 1003).unwrap();
+        let summary = import_backup(&other, &json, true).unwrap();
+        assert_eq!(summary.finance_entries, 1);
+        let accounts = other.fin_account_balances("2026-11").unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].current, 3050.0);
+
+        // Backup só com finanças (sem hábitos) também é aceito.
+        let only_finance = json!({ "format": FORMAT_ID, "habits": [], "finance": json["finance"].clone() });
+        let third = Db::open_in_memory().unwrap();
+        assert_eq!(import_backup(&third, &only_finance, false).unwrap().finance_entries, 1);
     }
 
     #[test]

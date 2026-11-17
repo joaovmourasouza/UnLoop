@@ -147,3 +147,110 @@ CREATE TABLE IF NOT EXISTS setting (
 -- Início da sequência atual (equivalente ao COALESCE do original):
 -- SELECT COALESCE((SELECT MAX(occurred_at) FROM diary_entry WHERE habit_id = :id AND is_reset = 1),
 --                 (SELECT quit_at FROM habit WHERE id = :id));
+
+-- v6: finanças (funções do FinanCerto). Meses "AAAA-MM", datas "AAAA-MM-DD".
+-- Regras em crates/unloop-core/src/finance.rs. A migração também cria as
+-- categorias padrão (Salário, Mercado, Moradia…).
+CREATE TABLE IF NOT EXISTS fin_account (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL UNIQUE,
+    initial_balance REAL    NOT NULL DEFAULT 0,
+    color           INTEGER NOT NULL DEFAULT 1003,
+    position        INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fin_category (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name  TEXT    NOT NULL,
+    kind  INTEGER NOT NULL,
+    color INTEGER NOT NULL DEFAULT 1021,
+    UNIQUE (name, kind)
+);
+
+CREATE TABLE IF NOT EXISTS fin_card (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT    NOT NULL,
+    credit_limit REAL    NOT NULL DEFAULT 0,
+    closing_day  INTEGER NOT NULL DEFAULT 3,
+    due_day      INTEGER NOT NULL DEFAULT 10,
+    account_id   INTEGER REFERENCES fin_account(id) ON DELETE SET NULL,
+    color        INTEGER NOT NULL DEFAULT 1005,
+    created_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fin_entry (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    month             TEXT    NOT NULL,
+    kind              INTEGER NOT NULL,
+    description       TEXT    NOT NULL,
+    amount            REAL    NOT NULL,
+    due_date          TEXT,
+    category_id       INTEGER REFERENCES fin_category(id) ON DELETE SET NULL,
+    account_id        INTEGER REFERENCES fin_account(id) ON DELETE SET NULL,
+    paid              INTEGER NOT NULL DEFAULT 0,
+    paid_date         TEXT,
+    note              TEXT    NOT NULL DEFAULT '',
+    excluded          INTEGER NOT NULL DEFAULT 0,
+    recurrence_group  TEXT,
+    recurrence_until  TEXT,
+    installment_group TEXT,
+    installment_num   INTEGER,
+    installment_total INTEGER,
+    transfer_group    TEXT,
+    card_id           INTEGER REFERENCES fin_card(id) ON DELETE SET NULL,
+    created_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_fin_entry_month ON fin_entry (month, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_fin_entry_recurrence ON fin_entry (recurrence_group, month)
+    WHERE recurrence_group IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_fin_entry_invoice ON fin_entry (card_id, month) WHERE card_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fin_recurrence_skip (
+    recurrence_group TEXT NOT NULL,
+    month            TEXT NOT NULL,
+    PRIMARY KEY (recurrence_group, month)
+);
+
+CREATE TABLE IF NOT EXISTS fin_budget (
+    category_id   INTEGER PRIMARY KEY REFERENCES fin_category(id) ON DELETE CASCADE,
+    monthly_limit REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fin_card_purchase (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id           INTEGER NOT NULL REFERENCES fin_card(id) ON DELETE CASCADE,
+    description       TEXT    NOT NULL,
+    amount            REAL    NOT NULL,
+    date              TEXT    NOT NULL,
+    invoice_month     TEXT    NOT NULL,
+    category_id       INTEGER REFERENCES fin_category(id) ON DELETE SET NULL,
+    installment_group TEXT,
+    installment_num   INTEGER,
+    installment_total INTEGER,
+    created_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_fin_purchase_invoice ON fin_card_purchase (card_id, invoice_month);
+
+CREATE TABLE IF NOT EXISTS fin_goal (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL,
+    target     REAL    NOT NULL,
+    deadline   TEXT,
+    start      TEXT    NOT NULL,
+    state      INTEGER NOT NULL DEFAULT 0,
+    done_at    INTEGER,
+    icon       TEXT    NOT NULL DEFAULT '🎯',
+    color      INTEGER NOT NULL DEFAULT 1008,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fin_goal_deposit (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id    INTEGER NOT NULL REFERENCES fin_goal(id) ON DELETE CASCADE,
+    amount     REAL    NOT NULL,
+    date       TEXT    NOT NULL,
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_fin_deposit_goal ON fin_goal_deposit (goal_id, date);

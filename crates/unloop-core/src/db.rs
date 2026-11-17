@@ -10,7 +10,7 @@ use crate::calc::HabitBundle;
 use crate::model::*;
 use crate::presets::{goal_presets, DEFAULT_AFFIRMATIONS};
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Tabelas de texto simples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,7 +29,7 @@ impl TextTable {
 }
 
 pub struct Db {
-    conn: Connection,
+    pub(crate) conn: Connection,
     tx_depth: Cell<u32>,
 }
 
@@ -72,7 +72,10 @@ impl Db {
             if current < 5 {
                 self.conn.execute_batch(MIGRATION_V5)?;
             }
-            // Próximas versões: if current < 6 { self.conn.execute_batch(MIGRATION_V6)?; }
+            if current < 6 {
+                self.conn.execute_batch(crate::finance::MIGRATION_V6)?;
+            }
+            // Próximas versões: if current < 7 { self.conn.execute_batch(MIGRATION_V7)?; }
             self.conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
         })
     }

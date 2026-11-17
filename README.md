@@ -13,6 +13,7 @@ crates/unloop-core/   regras, SQLite e backup, sem GUI (testável em qualquer m�
   src/format.rs       formatação pt-BR de durações, números e moeda (+ testes)
   src/presets.rs      45 metas padrão, sugestões, moedas (+ testes)
   src/db.rs           schema + migrações (PRAGMA user_version) e repositório (+ testes)
+  src/finance.rs      finanças: contas, lançamentos, cartões, orçamento, metas (+ testes)
   src/backup.rs       export/import JSON (compatível com o Quitzilla) e CSV (+ testes)
 crates/unloop/        app GTK4/libadwaita
   src/app.rs          janela, contexto compartilhado, relógio de 1 s, ações, CSS
@@ -21,6 +22,7 @@ crates/unloop/        app GTK4/libadwaita
   src/detail.rs       detalhe com 7 abas
   src/entry.rs        entrada do diário
   src/settings.rs     configurações e backup
+  src/finance_page.rs seção Finanças (visões, editores de lançamento, cartão e meta)
 data/                 .desktop, metainfo e ícone
 build-aux/flatpak/    manifest do Flatpak
 ```
@@ -99,6 +101,21 @@ Botão **✅ Tarefas** (Ctrl+T):
 - Concluir com um clique e **🍅 Foco nesta tarefa**, que vincula o Pomodoro à tarefa.
 - As tarefas de hoje também aparecem na tela inicial.
 
+## Finanças
+
+Botão **Finanças** no trilho lateral, logo abaixo de Foco (Ctrl+5). São as funções do [FinanCerto](https://github.com/financerto/financerto-app) sem o servidor: tudo no mesmo SQLite do UnLoop e no mesmo backup. O mês é escolhido no cabeçalho; Ctrl+N cria um lançamento.
+
+- **Visão geral**: saldo nas contas, receitas e despesas do mês (com o que já foi recebido/pago), sobra do mês, previsão no fim do mês, quanto dá para gastar por dia, contas a pagar (atrasadas e dos próximos 7 dias), gastos por categoria, últimos 6 meses, contas, cartões e próximas parcelas.
+- **Lançamentos**: receitas e despesas avulsas, **recorrentes** (todo mês, com ou sem número de meses) ou **parceladas** (valor da parcela ou total dividido). Marcar pago/recebido com um clique; despesas em aberto de meses anteriores aparecem no topo. Ao editar ou apagar uma série: só este, este e os próximos, ou todos. **Fora dos totais** para dinheiro que só passa pela conta.
+- **Calendário** do mês com receitas, contas a pagar, atrasadas e pagas.
+- **Contas** com saldo inicial, saldo atual (pelos lançamentos pagos) e previsto, e **transferências** entre contas (não contam como receita nem despesa).
+- **Cartões de crédito**: limite, dia de fechamento e de vencimento, conta que paga a fatura. Cada compra (à vista ou parcelada) cai na fatura certa; a fatura vira uma despesa do mês e pagá-la desconta da conta.
+- **Orçamento** por categoria com barra de progresso (compras no cartão contam na categoria delas).
+- **Economias** (metas de economia) com depósitos e retiradas, prazo opcional, quanto guardar por mês, se está no ritmo, e estados ativa/pausada/concluída/arquivada.
+- **Categorias** de receita e despesa com cor.
+
+Ficaram de fora, por dependerem de servidor ou internet: login e várias pessoas por casa, Open Finance (Pluggy), OCR de nota fiscal e holerite, cotações e proventos automáticos de investimentos.
+
 ## CLI e Claude Code
 
 `unloop-cli` lê e modifica tudo pela linha de comando, no mesmo banco do app. O app aberto se atualiza sozinho quando a CLI grava.
@@ -150,7 +167,7 @@ No celular, faça um backup em arquivo (local). Copie o `.json` para o computado
 
 > O código ainda **não foi compilado**: foi escrito numa máquina Windows sem Rust e sem GTK. Rode `cargo test -p unloop-core` e `cargo build -p unloop` primeiro e corrija o que o compilador apontar.
 
-Pronto: **tarefas** (listas, prazos, prioridade, tags, subtarefas), **notas de gatilhos/ajuda/análises**, **CLI `unloop-cli` + skill para o Claude Code**, **hábitos de check diário** (dias programados, meta diária com progresso), **Pomodoro/cronômetro com estatísticas**, hábitos de parar (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), **regras por hábito** (o que é permitido e não reinicia a sequência, e o que não é permitido e reinicia; com sugestões prontas para hábitos comuns e vínculo com o diário), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
+Pronto: **finanças** (contas, lançamentos recorrentes e parcelados, transferências, cartões com fatura, orçamento, metas, calendário), **tarefas** (listas, prazos, prioridade, tags, subtarefas), **notas de gatilhos/ajuda/análises**, **CLI `unloop-cli` + skill para o Claude Code**, **hábitos de check diário** (dias programados, meta diária com progresso), **Pomodoro/cronômetro com estatísticas**, hábitos de parar (criar, editar, apagar, reordenar, 12 formatos de contador, contagem progressiva ou regressiva), **regras por hábito** (o que é permitido e não reinicia a sequência, e o que não é permitido e reinicia; com sugestões prontas para hábitos comuns e vínculo com o diário), diário com filtros, metas padrão e pessoais (com fixação), estatísticas com gráfico de períodos, 12 troféus, recompensas, investimentos de tempo, projeção de economia, motivos e afirmações, tema, moeda, lema, backup JSON (inclusive do Quitzilla) e exportação do diário em CSV.
 
 Próximos passos:
 - [ ] Onboarding guiado (custo da vida toda, primeira meta, primeira recompensa)

@@ -1,5 +1,5 @@
 //! Moldura do app no estilo TickTick: trilho lateral com as seções
-//! (Hoje, Tarefas, Hábitos, Foco, Configurações) e a área de conteúdo
+//! (Hoje, Tarefas, Hábitos, Foco, Finanças, Configurações) e a área de conteúdo
 //! (`Ctx::nav`), cuja raiz é trocada ao escolher uma seção.
 
 use adw::prelude::*;
@@ -14,11 +14,12 @@ pub enum Section {
     Tasks,
     Habits,
     Focus,
+    Finance,
     Settings,
 }
 
 impl Section {
-    pub const MAIN: [Section; 4] = [Section::Today, Section::Tasks, Section::Habits, Section::Focus];
+    pub const MAIN: [Section; 5] = [Section::Today, Section::Tasks, Section::Habits, Section::Focus, Section::Finance];
 
     fn icon(self) -> &'static str {
         match self {
@@ -26,6 +27,7 @@ impl Section {
             Section::Tasks => "object-select-symbolic",
             Section::Habits => "starred-symbolic",
             Section::Focus => "alarm-symbolic",
+            Section::Finance => "unloop-wallet-symbolic",
             Section::Settings => "emblem-system-symbolic",
         }
     }
@@ -36,6 +38,7 @@ impl Section {
             Section::Tasks => "Tarefas",
             Section::Habits => "Hábitos",
             Section::Focus => "Foco",
+            Section::Finance => "Finanças",
             Section::Settings => "Ajustes",
         }
     }
@@ -46,6 +49,7 @@ impl Section {
             Section::Tasks => "Tarefas e listas (Ctrl+2 ou Ctrl+T)",
             Section::Habits => "Hábitos (Ctrl+3)",
             Section::Focus => "Foco / Pomodoro (Ctrl+4 ou Ctrl+F)",
+            Section::Finance => "Finanças (Ctrl+5)",
             Section::Settings => "Configurações (Ctrl+,)",
         }
     }
@@ -56,6 +60,7 @@ impl Section {
             Section::Tasks => crate::tasks_page::page(ctx),
             Section::Habits => crate::home::habits_page(ctx),
             Section::Focus => crate::focus::page(ctx),
+            Section::Finance => crate::finance_page::page(ctx),
             Section::Settings => crate::settings::page(ctx),
         }
     }
