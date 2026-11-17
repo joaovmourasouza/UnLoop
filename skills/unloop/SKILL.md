@@ -1,6 +1,6 @@
 ---
 name: unloop
-description: Lê e modifica os dados do UnLoop (hábitos, diário, check-ins, notas de gatilhos, tarefas, foco) pela CLI `unloop-cli`. Use quando o usuário pedir para registrar algo no UnLoop, criar ou descrever tarefas, anotar gatilhos ou o que ajuda num hábito, ou analisar o progresso dele.
+description: Lê e modifica os dados do UnLoop (hábitos, diário, check-ins, notas de gatilhos, tarefas, metas em cascata ano→semana, foco) pela CLI `unloop-cli`. Use quando o usuário pedir para registrar algo no UnLoop, criar ou descrever tarefas, anotar gatilhos ou o que ajuda num hábito, ou analisar o progresso dele.
 ---
 
 # UnLoop pela linha de comando
@@ -79,6 +79,18 @@ unloop-cli task done 42
 unloop-cli task sub add 42 "Enviar por e-mail"
 unloop-cli list all | list add "Casa" | list rename Casa "Lar" | list delete Lar --yes
 
+# Metas em cascata: ano → semestre → trimestre → mês → semana (cada uma com meta-mãe um nível acima)
+unloop-cli --json goal now                    # metas dos períodos de hoje, do ano à semana
+unloop-cli --json goal tree --year 2026       # árvore do ano
+unloop-cli goal add "Curso: chegar na aula ~#085" --level ano --area Estudo
+unloop-cli goal add "Curso: #052 → ~#085" --period T4 --parent 1       # períodos: 2026, S2, T4, nov, 11/2026, W47, atual
+unloop-cli goal add "Aulas #064 a #067" --parent 4                     # sem nível: o de baixo da mãe, no período atual
+unloop-cli goal add "Fechar o Módulo 2" --period nov --parent 2 --habit "acordar cedo" --desc-file - <<'EOF'
+...
+EOF
+unloop-cli goal done 5 | goal drop 5 --note "remanejado pra W48" | goal reopen 5 | goal delete 5 --yes
+unloop-cli task add "Aula #065" --goal 5 --due hoje   # tarefa ligada à meta (task edit 42 --goal nenhum desliga)
+
 # Foco
 unloop-cli --json focus stats --period week   # week | month | year (com comparação ao período anterior)
 unloop-cli --json focus list --limit 20
@@ -93,6 +105,13 @@ Prazos aceitam: `hoje`, `amanhã`, `ontem`, `+3`, `seg`…`dom` (próxima ocorr�
 2. Cruze: dias da semana e faixas do dia com mais recaídas (`relapsesByWeekday`, `relapsesByPeriodOfDay`), anotações do diário, regras mais usadas e notas de gatilho já existentes.
 3. Escreva a conclusão como nota `insight` com `--source claude`. Seja concreto (números, exemplos do diário) e termine com 1–3 sugestões práticas.
 4. Se encontrar gatilhos ou estratégias novas, proponha ao usuário antes de criar notas `trigger`/`helper` em nome dele.
+
+**Planejar em cascata (como no second brain)**
+1. `goal tree --json` e `goal now --json` antes de criar: não duplique metas.
+2. Desça do macro para o micro: a meta do ano gera as do semestre, que geram as do trimestre, do mês e da semana. Cada meta filha usa `--parent` (a CLI recusa mãe de nível igual ou abaixo, ou período que não contém o da filha).
+3. A semana ISO pertence ao mês da sua quinta-feira (W44 = 26/10–01/11 é de outubro).
+4. O que não rodou ou foi remanejado é **riscado** (`goal drop --note "motivo → destino"`), não apagado: sai do progresso da mãe, mas fica no histórico.
+5. Tarefas do dia ligam na meta da semana com `--goal`; o progresso sobe pela cascata (média das filhas).
 
 **Organizar tarefas a partir de uma conversa**
 - Quebre pedidos grandes em tarefas com título curto e acionável, descrição com contexto/objetivo/critério de pronto, subtarefas para os passos e prazo/prioridade quando o usuário indicar.

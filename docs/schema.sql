@@ -254,3 +254,27 @@ CREATE TABLE IF NOT EXISTS fin_goal_deposit (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_fin_deposit_goal ON fin_goal_deposit (goal_id, date);
+
+-- Metas em cascata (ano → semestre → trimestre → mês → semana). Sem número de versão:
+-- o app cria estas tabelas (e task.objective_id) sempre que faltam.
+CREATE TABLE IF NOT EXISTS objective (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id   INTEGER REFERENCES objective(id) ON DELETE CASCADE,  -- meta-mãe (nível acima)
+    level       INTEGER NOT NULL,              -- 0 ano, 1 semestre, 2 trimestre, 3 mês, 4 semana
+    period      TEXT    NOT NULL,              -- 2026 | 2026-S2 | 2026-T4 | 2026-11 | 2026-W47 (ISO)
+    title       TEXT    NOT NULL,
+    description TEXT    NOT NULL DEFAULT '',
+    area        TEXT    NOT NULL DEFAULT '',
+    status      INTEGER NOT NULL DEFAULT 0,    -- 0 em andamento, 1 concluída, 2 riscada
+    status_note TEXT    NOT NULL DEFAULT '',   -- motivo (ex.: "remanejado pra W48")
+    position    INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    closed_at   INTEGER
+);
+CREATE TABLE IF NOT EXISTS objective_habit (
+    objective_id INTEGER NOT NULL REFERENCES objective(id) ON DELETE CASCADE,
+    habit_id     INTEGER NOT NULL REFERENCES habit(id) ON DELETE CASCADE,
+    PRIMARY KEY (objective_id, habit_id)
+);
+-- task ganha: objective_id INTEGER REFERENCES objective(id) ON DELETE SET NULL

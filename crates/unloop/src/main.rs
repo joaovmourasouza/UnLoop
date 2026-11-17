@@ -4,6 +4,7 @@ mod detail;
 mod entry;
 mod finance_page;
 mod focus;
+mod goals_page;
 mod habit_form;
 mod home;
 mod notes;

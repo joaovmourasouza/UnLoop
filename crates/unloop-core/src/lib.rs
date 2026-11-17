@@ -6,6 +6,7 @@
 //! - [`presets`]: metas padrão, sugestões de hábitos, moedas.
 //! - [`db`]: SQLite com migrações por `PRAGMA user_version`.
 //! - [`finance`]: finanças pessoais (contas, lançamentos, cartões, orçamento, metas).
+//! - [`objectives`]: metas em cascata (ano → semestre → trimestre → mês → semana).
 //! - [`backup`]: export/import JSON (compatível com o backup do Quitzilla) e CSV.
 
 pub mod analysis;
@@ -16,6 +17,7 @@ pub mod db;
 pub mod finance;
 pub mod format;
 pub mod model;
+pub mod objectives;
 pub mod pomodoro;
 pub mod presets;
 pub mod tasks;

@@ -158,6 +158,12 @@ fn fill_today(ctx: &Shared, content: &gtk::Box) {
     group.add(&list);
     content.append(&group);
 
+    // Metas da semana e do mês (o micro da cascata).
+    if let Some(goals) = crate::goals_page::week_group(ctx) {
+        goals.set_header_suffix(Some(&see_all(ctx, Section::Goals)));
+        content.append(&goals);
+    }
+
     // Hábitos de construir agendados para hoje.
     let summary = if build.is_empty() {
         "Nenhum hábito para acompanhar ainda.".to_string()

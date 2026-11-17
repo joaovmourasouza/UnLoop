@@ -15,6 +15,7 @@ use unloop_core::checkin::{self, day_key, describe_mask, local_date, NaiveDate};
 use unloop_core::db::Db;
 use unloop_core::format::{format_compact, format_money, format_number};
 use unloop_core::model::*;
+use unloop_core::objectives::{self as obj, Level, Objective, Status};
 use unloop_core::pomodoro::{self, Period};
 use unloop_core::tasks::{self, TaskView};
 
@@ -74,6 +75,9 @@ enum Command {
     /// Listas de tarefas
     #[command(subcommand)]
     List(ListCmd),
+    /// Metas em cascata: ano → semestre → trimestre → mês → semana
+    #[command(subcommand)]
+    Goal(GoalCmd),
     /// Sessões de foco (Pomodoro)
     #[command(subcommand)]
     Focus(FocusCmd),
@@ -356,6 +360,106 @@ struct TaskFields {
     /// Hábito relacionado (id ou nome; "nenhum" remove)
     #[arg(long)]
     habit: Option<String>,
+    /// Meta que a tarefa ajuda a cumprir (id; "nenhum" remove)
+    #[arg(long)]
+    goal: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum GoalCmd {
+    /// Árvore de metas de um ano (padrão: o ano atual)
+    Tree {
+        /// Ano (ex.: 2026)
+        #[arg(long)]
+        year: Option<i32>,
+        /// Esconde as riscadas
+        #[arg(long)]
+        hide_dropped: bool,
+    },
+    /// Metas dos períodos de hoje, do ano até a semana
+    Now,
+    /// Lista metas filtrando por nível, período ou estado
+    List {
+        /// ano, semestre, trimestre, mes, semana
+        #[arg(long)]
+        level: Option<String>,
+        /// Ex.: 2026, S2, T4, nov, W47, atual
+        #[arg(long)]
+        period: Option<String>,
+        /// Só as em andamento
+        #[arg(long)]
+        open: bool,
+    },
+    /// Mostra uma meta: caminho, filhas, tarefas e hábitos
+    Show { id: i64 },
+    /// Cria uma meta
+    #[command(after_help = "Exemplos:\n  \
+        unloop-cli goal add \"Curso: chegar na aula ~#085\" --level ano --area Estudo\n  \
+        unloop-cli goal add \"Curso: #052 → ~#085\" --period T4 --parent 1\n  \
+        unloop-cli goal add \"Fechar o Módulo 2 (#073)\" --period nov --parent 2 --habit \"acordar cedo\"\n  \
+        unloop-cli goal add \"Aulas #064 a #067\" --parent 3   # nível e período: o de baixo, no período atual")]
+    Add {
+        title: String,
+        #[command(flatten)]
+        fields: GoalFields,
+        /// Cria mesmo que já exista uma meta igual no período
+        #[arg(long)]
+        force: bool,
+    },
+    /// Altera uma meta
+    Edit {
+        id: i64,
+        #[arg(long)]
+        title: Option<String>,
+        #[command(flatten)]
+        fields: GoalFields,
+    },
+    /// Conclui uma meta
+    Done {
+        id: i64,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Risca uma meta (não rodou, remanejada, saiu do plano); ela deixa de contar no progresso da mãe
+    Drop {
+        id: i64,
+        /// Motivo (ex.: "remanejado pra W48")
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Volta uma meta para "em andamento"
+    Reopen { id: i64 },
+    /// Apaga uma meta e as metas filhas (as tarefas ficam sem meta)
+    Delete {
+        id: i64,
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Args)]
+struct GoalFields {
+    /// ano, semestre, trimestre, mes, semana
+    #[arg(long)]
+    level: Option<String>,
+    /// Ex.: 2026, S2, 2026-T4, nov, 11/2026, W47, atual, ou uma data com --level
+    #[arg(long)]
+    period: Option<String>,
+    /// Meta-mãe (id; "nenhum" remove)
+    #[arg(long)]
+    parent: Option<String>,
+    /// Área (ex.: Estudo, Financeiro)
+    #[arg(long)]
+    area: Option<String>,
+    /// Descrição (Markdown)
+    #[arg(long)]
+    desc: Option<String>,
+    /// Lê a descrição de um arquivo; "-" lê da entrada padrão
+    #[arg(long, conflicts_with = "desc")]
+    desc_file: Option<PathBuf>,
+    /// Hábito ligado (id ou nome; pode repetir; substitui os atuais; "nenhum" remove todos)
+    #[arg(long)]
+    habit: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -708,6 +812,7 @@ fn task_json(t: &Task, lists: &[TaskList], today: NaiveDate, now: i64) -> Value 
         "done": t.is_done(),
         "doneAt": t.done_at.map(iso),
         "habitId": t.habit_id,
+        "goalId": t.objective_id,
         "subtasks": subtasks,
         "subtaskProgress": format!("{done}/{total}"),
     })
@@ -764,6 +869,7 @@ fn run(cli: Cli) -> Res<Out> {
         Command::Rule(cmd) => rule_cmd(&db, cmd),
         Command::Task(cmd) => task_cmd(&db, cmd, now, today),
         Command::List(cmd) => list_cmd(&db, cmd),
+        Command::Goal(cmd) => goal_cmd(&db, cmd, today),
         Command::Focus(cmd) => focus_cmd(&db, cmd, today),
         Command::Export { out: file } => {
             let data = ok(backup::export_backup(&db, env!("CARGO_PKG_VERSION")))?;
@@ -814,6 +920,8 @@ fn context(db: &Db, now: i64, today: NaiveDate, currency: &str, days: i64) -> Re
     let records = ok(db.focus_sessions_since(pomodoro::week_window_start(now)))?;
     let summary = pomodoro::summarize(&records, today);
     let open = tasks::filter_view(&all_tasks, TaskView::All, today, now).len();
+    let goals_now = goals_now_json(db, today)?;
+    text.push_str(&goals_now.1);
     text.push_str(&format!(
         "\nTarefas abertas: {open} · hoje/atrasadas: {}\nFoco hoje: {} · últimos 7 dias: {}\n",
         tasks::filter_view(&all_tasks, TaskView::Today, today, now).len(),
@@ -826,6 +934,7 @@ fn context(db: &Db, now: i64, today: NaiveDate, currency: &str, days: i64) -> Re
             "today": day_key(today),
             "currency": currency,
             "habits": habits,
+            "goals": goals_now.0,
             "tasks": { "open": open, "overdue": view(TaskView::Overdue), "today": view(TaskView::Today), "next7Days": view(TaskView::Next7) },
             "focus": { "todayMinutes": summary.today_ms / 60_000, "todaySessions": summary.today_sessions, "last7DaysMinutes": summary.week_ms / 60_000 },
         }),
@@ -1253,6 +1362,13 @@ fn apply_fields(db: &Db, t: &mut Task, f: TaskFields, today: NaiveDate) -> Res<(
             Some(find_habit(db, &habit)?.id)
         };
     }
+    if let Some(goal) = f.goal {
+        t.objective_id = if matches!(goal.trim().to_lowercase().as_str(), "nenhum" | "none") {
+            None
+        } else {
+            Some(get_goal(db, &goal)?.id)
+        };
+    }
     Ok(())
 }
 
@@ -1462,6 +1578,349 @@ fn focus_cmd(db: &Db, cmd: FocusCmd, today: NaiveDate) -> Res<Out> {
                 }),
                 text,
             )
+        }
+    }
+}
+
+// =================================================================== Metas
+
+fn get_goal(db: &Db, id: &str) -> Res<Objective> {
+    let n: i64 = id.trim().trim_start_matches('#').parse().map_err(|_| format!("id de meta inválido: {id}"))?;
+    ok(db.objective(n))?.ok_or_else(|| format!("meta {n} não existe"))
+}
+
+fn parse_level(text: &str) -> Res<Level> {
+    Level::parse(text).ok_or_else(|| format!("nível inválido: {text} (use ano, semestre, trimestre, mes ou semana)"))
+}
+
+fn goal_json(o: &Objective, all: &[Objective], tasks: &[Task], habits: &[Habit]) -> Value {
+    let p = obj::progress(o, all, tasks);
+    json!({
+        "id": o.id,
+        "parentId": o.parent_id,
+        "level": o.level.key(),
+        "period": o.period,
+        "periodLabel": o.period_label(),
+        "title": o.title,
+        "description": o.description,
+        "area": o.area,
+        "status": o.status.key(),
+        "statusNote": o.status_note,
+        "progress": { "done": p.done, "total": p.total, "percent": p.percent() },
+        "habits": o.habit_ids.iter().filter_map(|id| habits.iter().find(|h| h.id == *id)).map(|h| json!({ "id": h.id, "name": h.name })).collect::<Vec<_>>(),
+        "taskIds": tasks.iter().filter(|t| t.objective_id == Some(o.id)).map(|t| t.id).collect::<Vec<_>>(),
+    })
+}
+
+fn goal_line(o: &Objective, all: &[Objective], tasks: &[Task]) -> String {
+    let p = obj::progress(o, all, tasks);
+    let mut line = format!(
+        "{} #{} [{}] {}",
+        o.status.emoji(),
+        o.id,
+        obj::short_label(o.level, &o.period),
+        if o.status == Status::Dropped { format!("~~{}~~", o.title) } else { o.title.clone() }
+    );
+    if o.status != Status::Dropped {
+        line.push_str(&format!(" · {}% ({}/{})", p.percent(), p.done, p.total));
+    }
+    if !o.area.is_empty() {
+        line.push_str(&format!(" · {}", o.area));
+    }
+    if !o.status_note.is_empty() {
+        line.push_str(&format!(" — {}", o.status_note));
+    }
+    line
+}
+
+/// Metas dos períodos de hoje (JSON e texto), usadas no `context` e no `goal now`.
+fn goals_now_json(db: &Db, today: NaiveDate) -> Res<(Value, String)> {
+    let all = ok(db.objectives())?;
+    let tasks = ok(db.tasks())?;
+    let habits = ok(db.habits())?;
+    let mut levels = Vec::new();
+    let mut text = String::new();
+    for (level, period) in obj::current_chain(today) {
+        let here: Vec<&Objective> = all.iter().filter(|o| o.level == level && o.period == period).collect();
+        if !here.is_empty() {
+            text.push_str(&format!("\n{} — {}\n", level.label(), obj::period_label(level, &period)));
+            for o in &here {
+                text.push_str(&format!("  {}\n", goal_line(o, &all, &tasks)));
+            }
+        }
+        levels.push(json!({
+            "level": level.key(),
+            "period": period,
+            "periodLabel": obj::period_label(level, &period),
+            "goals": here.iter().map(|o| goal_json(o, &all, &tasks, &habits)).collect::<Vec<_>>(),
+        }));
+    }
+    if text.is_empty() {
+        text = "\nNenhuma meta nos períodos de hoje.\n".into();
+    }
+    Ok((json!(levels), text))
+}
+
+/// Nível e período de uma meta a partir das opções (e da mãe, se houver).
+fn resolve_period(
+    level_arg: Option<&str>,
+    period_arg: Option<&str>,
+    parent: Option<&Objective>,
+    current: Option<(Level, &str)>,
+    today: NaiveDate,
+) -> Res<(Level, String)> {
+    let hint = match level_arg {
+        Some(l) => Some(parse_level(l)?),
+        None => None,
+    };
+    if let Some(text) = period_arg {
+        // Com um nível já existente e só o período mudando, o nível atual serve de dica.
+        let hint = hint.or(current.map(|c| c.0));
+        let (level, key) = obj::parse_period(text, hint, today).ok_or_else(|| format!("período inválido: {text}"))?;
+        if let Some(h) = hint.filter(|_| level_arg.is_some()) {
+            if h != level {
+                return Err(format!("o período {text} é de {}, não de {}", level.label().to_lowercase(), h.label().to_lowercase()));
+            }
+        }
+        return Ok((level, key));
+    }
+    let level = match (hint, parent, current) {
+        (Some(l), _, _) => l,
+        (None, _, Some((l, _))) => l,
+        (None, Some(p), None) => p.level.child().ok_or("a meta-mãe já é semanal: não há nível abaixo")?,
+        (None, None, None) => return Err("informe --level ou --period (ou --parent para usar o nível de baixo)".into()),
+    };
+    if let Some((l, key)) = current.filter(|(l, _)| *l == level) {
+        return Ok((l, key.to_string()));
+    }
+    let today_key = obj::period_key(level, today);
+    match parent {
+        // Dentro da mãe: o período de hoje, se couber; senão o primeiro período dela.
+        Some(p) if !obj::contains(p.level, &p.period, level, &today_key) => {
+            let (start, end) = p.range().ok_or("período da meta-mãe inválido")?;
+            let first = obj::periods_between(level, start, end).into_iter().next().ok_or("não há período desse nível dentro da meta-mãe")?;
+            Ok((level, first))
+        }
+        _ => Ok((level, today_key)),
+    }
+}
+
+fn habit_ids(db: &Db, names: &[String]) -> Res<Vec<i64>> {
+    if names.iter().any(|n| matches!(n.trim().to_lowercase().as_str(), "nenhum" | "none")) {
+        return Ok(Vec::new());
+    }
+    let mut ids = Vec::new();
+    for n in names {
+        let id = find_habit(db, n)?.id;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+fn tree_lines(id: i64, depth: usize, all: &[Objective], tasks: &[Task], hide_dropped: bool, out: &mut String) {
+    for c in obj::children(all, id) {
+        if hide_dropped && c.status == Status::Dropped {
+            continue;
+        }
+        out.push_str(&format!("{}└ {}\n", "   ".repeat(depth), goal_line(c, all, tasks)));
+        tree_lines(c.id, depth + 1, all, tasks, hide_dropped, out);
+    }
+}
+
+fn tree_json(o: &Objective, all: &[Objective], tasks: &[Task], habits: &[Habit], hide_dropped: bool) -> Value {
+    let mut v = goal_json(o, all, tasks, habits);
+    v["children"] = json!(obj::children(all, o.id)
+        .into_iter()
+        .filter(|c| !(hide_dropped && c.status == Status::Dropped))
+        .map(|c| tree_json(c, all, tasks, habits, hide_dropped))
+        .collect::<Vec<_>>());
+    v
+}
+
+fn goal_cmd(db: &Db, cmd: GoalCmd, today: NaiveDate) -> Res<Out> {
+    let all = ok(db.objectives())?;
+    let tasks = ok(db.tasks())?;
+    let habits = ok(db.habits())?;
+    match cmd {
+        GoalCmd::Tree { year, hide_dropped } => {
+            let year = year.unwrap_or_else(|| checkin::Datelike::year(&today));
+            let (start, end) = obj::period_range(Level::Year, &year.to_string()).ok_or("ano inválido")?;
+            // Raízes: metas sem mãe cujo período cai no ano.
+            let roots: Vec<&Objective> = all
+                .iter()
+                .filter(|o| o.parent_id.is_none_or(|p| !all.iter().any(|x| x.id == p)))
+                .filter(|o| obj::anchor(o.level, &o.period).is_some_and(|a| a >= start && a <= end))
+                .filter(|o| !(hide_dropped && o.status == Status::Dropped))
+                .collect();
+            let mut text = String::new();
+            for r in &roots {
+                text.push_str(&format!("{}\n", goal_line(r, &all, &tasks)));
+                tree_lines(r.id, 0, &all, &tasks, hide_dropped, &mut text);
+            }
+            if text.is_empty() {
+                text = format!("Nenhuma meta em {year}.");
+            }
+            out(json!(roots.iter().map(|r| tree_json(r, &all, &tasks, &habits, hide_dropped)).collect::<Vec<_>>()), text.trim_end())
+        }
+        GoalCmd::Now => {
+            let (v, text) = goals_now_json(db, today)?;
+            out(v, text.trim().to_string())
+        }
+        GoalCmd::List { level, period, open } => {
+            let level = level.as_deref().map(parse_level).transpose()?;
+            let period = match period.as_deref() {
+                Some(p) => Some(obj::parse_period(p, level, today).ok_or_else(|| format!("período inválido: {p}"))?),
+                None => None,
+            };
+            let items: Vec<&Objective> = all
+                .iter()
+                .filter(|o| level.is_none_or(|l| o.level == l))
+                .filter(|o| period.as_ref().is_none_or(|(l, k)| o.level == *l && o.period == *k))
+                .filter(|o| !open || o.status == Status::Open)
+                .collect();
+            let text = items.iter().map(|o| goal_line(o, &all, &tasks)).collect::<Vec<_>>().join("\n");
+            out(
+                json!(items.iter().map(|o| goal_json(o, &all, &tasks, &habits)).collect::<Vec<_>>()),
+                if text.is_empty() { "Nenhuma meta.".into() } else { text },
+            )
+        }
+        GoalCmd::Show { id } => {
+            let o = get_goal(db, &id.to_string())?;
+            let mut v = goal_json(&o, &all, &tasks, &habits);
+            let path = obj::ancestry(&all, o.id);
+            v["path"] = json!(path.iter().map(|p| json!({ "id": p.id, "level": p.level.key(), "period": p.period, "title": p.title })).collect::<Vec<_>>());
+            v["children"] = json!(obj::children(&all, o.id).iter().map(|c| goal_json(c, &all, &tasks, &habits)).collect::<Vec<_>>());
+            let lists = ok(db.task_lists())?;
+            let now = unloop_core::now_ms();
+            let linked: Vec<&Task> = tasks.iter().filter(|t| t.objective_id == Some(o.id)).collect();
+            v["tasks"] = json!(linked.iter().map(|t| task_json(t, &lists, today, now)).collect::<Vec<_>>());
+
+            let mut text = format!("{}\n", path.iter().map(|p| format!("[{}] {}", obj::short_label(p.level, &p.period), p.title)).collect::<Vec<_>>().join(" › "));
+            text.push_str(&format!("{} — {}\n", o.level.label(), o.period_label()));
+            text.push_str(&format!("{}\n", goal_line(&o, &all, &tasks)));
+            if !o.description.is_empty() {
+                text.push_str(&format!("\n{}\n", o.description));
+            }
+            let kids = obj::children(&all, o.id);
+            if !kids.is_empty() {
+                text.push_str("\nMetas filhas:\n");
+                for c in kids {
+                    text.push_str(&format!("  {}\n", goal_line(c, &all, &tasks)));
+                }
+            }
+            if !linked.is_empty() {
+                text.push_str("\nTarefas:\n");
+                for t in &linked {
+                    text.push_str(&format!("  {}\n", task_line(t, &lists, today)));
+                }
+            }
+            let names: Vec<String> = o.habit_ids.iter().filter_map(|id| habits.iter().find(|h| h.id == *id)).map(|h| format!("{} {}", icon(h.icon).emoji, h.name)).collect();
+            if !names.is_empty() {
+                text.push_str(&format!("\nHábitos: {}\n", names.join(", ")));
+            }
+            out(v, text.trim_end())
+        }
+        GoalCmd::Add { title, fields, force } => {
+            let title = title.trim().to_string();
+            if title.is_empty() {
+                return Err("dê um título à meta".into());
+            }
+            let parent = match fields.parent.as_deref() {
+                Some(p) if !matches!(p.trim().to_lowercase().as_str(), "nenhum" | "none") => Some(get_goal(db, p)?),
+                _ => None,
+            };
+            let (level, period) = resolve_period(fields.level.as_deref(), fields.period.as_deref(), parent.as_ref(), None, today)?;
+            if let Some(p) = &parent {
+                obj::check_parent(level, &period, p)?;
+            }
+            if !force {
+                if let Some(dup) = all.iter().find(|o| o.level == level && o.period == period && o.title.to_lowercase() == title.to_lowercase()) {
+                    return Err(format!("já existe a meta #{} \"{}\" em {} (use --force para criar outra)", dup.id, dup.title, dup.period_label()));
+                }
+            }
+            let mut o = Objective::new(level, &period, &title);
+            o.parent_id = parent.as_ref().map(|p| p.id);
+            o.area = fields.area.unwrap_or_else(|| parent.as_ref().map(|p| p.area.clone()).unwrap_or_default());
+            o.description = read_text(fields.desc, fields.desc_file)?.unwrap_or_default();
+            o.habit_ids = habit_ids(db, &fields.habit)?;
+            let id = ok(db.insert_objective(&o))?;
+            o.id = id;
+            let mut all = all;
+            all.push(o.clone());
+            out(goal_json(&o, &all, &tasks, &habits), format!("Meta #{id} criada: [{}] {}", o.period_label(), o.title))
+        }
+        GoalCmd::Edit { id, title, fields } => {
+            let mut o = get_goal(db, &id.to_string())?;
+            if let Some(t) = title {
+                if t.trim().is_empty() {
+                    return Err("o título não pode ficar vazio".into());
+                }
+                o.title = t.trim().to_string();
+            }
+            let parent = match fields.parent.as_deref() {
+                Some(p) if matches!(p.trim().to_lowercase().as_str(), "nenhum" | "none") => None,
+                Some(p) => Some(get_goal(db, p)?),
+                None => o.parent_id.and_then(|pid| all.iter().find(|x| x.id == pid).cloned()),
+            };
+            if parent.as_ref().is_some_and(|p| p.id == o.id || obj::descendants(&all, o.id).iter().any(|d| d.id == p.id)) {
+                return Err("a meta-mãe não pode ser a própria meta nem uma descendente dela".into());
+            }
+            let (level, period) = resolve_period(
+                fields.level.as_deref(),
+                fields.period.as_deref(),
+                parent.as_ref(),
+                Some((o.level, o.period.as_str())),
+                today,
+            )?;
+            if let Some(p) = &parent {
+                obj::check_parent(level, &period, p)?;
+            }
+            // As filhas precisam continuar cabendo.
+            for c in obj::children(&all, o.id) {
+                obj::check_parent(c.level, &c.period, &Objective { level, period: period.clone(), ..o.clone() })
+                    .map_err(|e| format!("a meta filha #{} deixaria de caber: {e}", c.id))?;
+            }
+            o.level = level;
+            o.period = period;
+            o.parent_id = parent.map(|p| p.id);
+            if let Some(a) = fields.area {
+                o.area = a;
+            }
+            if let Some(d) = read_text(fields.desc, fields.desc_file)? {
+                o.description = d;
+            }
+            if !fields.habit.is_empty() {
+                o.habit_ids = habit_ids(db, &fields.habit)?;
+            }
+            ok(db.update_objective(&o))?;
+            out(goal_json(&o, &all, &tasks, &habits), format!("Meta #{} atualizada: [{}] {}", o.id, o.period_label(), o.title))
+        }
+        GoalCmd::Done { id, note } => {
+            let o = get_goal(db, &id.to_string())?;
+            ok(db.set_objective_status(o.id, Status::Done, note.as_deref().unwrap_or("")))?;
+            let open_kids = obj::children(&all, o.id).iter().filter(|c| c.status == Status::Open).count();
+            let warn = if open_kids > 0 { format!(" ({open_kids} meta(s) filha(s) ainda em andamento)") } else { String::new() };
+            out(json!({ "id": o.id, "status": "done", "openChildren": open_kids }), format!("Meta #{} concluída ✅: {}{warn}", o.id, o.title))
+        }
+        GoalCmd::Drop { id, note } => {
+            let o = get_goal(db, &id.to_string())?;
+            ok(db.set_objective_status(o.id, Status::Dropped, note.as_deref().unwrap_or("")))?;
+            out(json!({ "id": o.id, "status": "dropped" }), format!("Meta #{} riscada: ~~{}~~{}", o.id, o.title, note.map(|n| format!(" — {n}")).unwrap_or_default()))
+        }
+        GoalCmd::Reopen { id } => {
+            let o = get_goal(db, &id.to_string())?;
+            ok(db.set_objective_status(o.id, Status::Open, ""))?;
+            out(json!({ "id": o.id, "status": "open" }), format!("Meta #{} reaberta: {}", o.id, o.title))
+        }
+        GoalCmd::Delete { id, yes } => {
+            let o = get_goal(db, &id.to_string())?;
+            let kids = obj::descendants(&all, o.id).len();
+            let what = if kids > 0 { format!("a meta #{} e as {kids} meta(s) abaixo dela", o.id) } else { format!("a meta #{}", o.id) };
+            require_yes(yes, &what)?;
+            ok(db.delete_objective(o.id))?;
+            out(json!({ "deleted": o.id, "descendants": kids }), format!("Apagada: {what}."))
         }
     }
 }

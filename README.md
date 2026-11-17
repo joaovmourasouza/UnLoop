@@ -116,6 +116,17 @@ Botão **Finanças** no trilho lateral, logo abaixo de Foco (Ctrl+5). São as fu
 
 Ficaram de fora, por dependerem de servidor ou internet: login e várias pessoas por casa, Open Finance (Pluggy), OCR de nota fiscal e holerite, cotações e proventos automáticos de investimentos.
 
+## Metas em cascata
+
+Botão **🚩 Metas** (Ctrl+6), no modelo do planejamento do second brain: **Ano → Semestre → Trimestre → Mês → Semana**.
+
+- Cada meta tem um **nível**, um **período** (2026, S2, T4, Novembro, W47) e uma **meta-mãe** de um nível acima cujo período a contém. Pular nível é permitido (ex.: meta do mês direto sob a do ano).
+- A semana pertence ao mês da sua quinta-feira (padrão ISO): a W44 (26/10–01/11) é de outubro.
+- **Progresso** sobe pela cascata: média das metas filhas; sem filhas, a fração de tarefas ligadas concluídas. Meta **riscada** (não rodou, remanejada) sai da conta, mas fica no histórico com o motivo.
+- **Agora**: as metas dos períodos de hoje, do ano até a semana. **Árvore**: o ano inteiro, com as filhas dentro das mães.
+- Tarefas ligam a uma meta (campo **Meta** no editor, ou "Adicionar tarefa" dentro da meta); hábitos também ("Hábitos ligados").
+- A tela **Hoje** mostra as metas em andamento da semana e do mês.
+
 ## CLI e Claude Code
 
 `unloop-cli` lê e modifica tudo pela linha de comando, no mesmo banco do app. O app aberto se atualiza sozinho quando a CLI grava.
@@ -125,6 +136,8 @@ unloop-cli --help
 unloop-cli --json context                    # retrato completo para análise
 unloop-cli habit add "Acordar cedo" --kind build --days seg-sex
 unloop-cli habit add "Cigarro" --since "12/11 22:00" --money 12
+unloop-cli goal now                          # metas de hoje, do ano à semana
+unloop-cli goal add "Curso: #052 → ~#085" --period T4 --parent 1
 unloop-cli note add "refrigerante" --kind trigger --title "Pós-almoço" --body "Sono e tédio às 14h"
 unloop-cli task add "Relatório" --list Trabalho --due "sex 14:00" --priority high --subtask "Rascunho"
 unloop-cli checkin "leitura" --add 15

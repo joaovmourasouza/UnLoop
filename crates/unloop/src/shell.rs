@@ -15,11 +15,14 @@ pub enum Section {
     Habits,
     Focus,
     Finance,
+    Goals,
     Settings,
 }
 
 impl Section {
-    pub const MAIN: [Section; 5] = [Section::Today, Section::Tasks, Section::Habits, Section::Focus, Section::Finance];
+    // Foco precisa ficar na posição 3: o rótulo do timer usa essa posição.
+    pub const MAIN: [Section; 6] =
+        [Section::Today, Section::Tasks, Section::Habits, Section::Focus, Section::Finance, Section::Goals];
 
     fn icon(self) -> &'static str {
         match self {
@@ -28,6 +31,7 @@ impl Section {
             Section::Habits => "starred-symbolic",
             Section::Focus => "alarm-symbolic",
             Section::Finance => "unloop-wallet-symbolic",
+            Section::Goals => "emoji-flags-symbolic",
             Section::Settings => "emblem-system-symbolic",
         }
     }
@@ -39,6 +43,7 @@ impl Section {
             Section::Habits => "Hábitos",
             Section::Focus => "Foco",
             Section::Finance => "Finanças",
+            Section::Goals => "Metas",
             Section::Settings => "Ajustes",
         }
     }
@@ -50,6 +55,7 @@ impl Section {
             Section::Habits => "Hábitos (Ctrl+3)",
             Section::Focus => "Foco / Pomodoro (Ctrl+4 ou Ctrl+F)",
             Section::Finance => "Finanças (Ctrl+5)",
+            Section::Goals => "Metas: ano → semestre → trimestre → mês → semana (Ctrl+6)",
             Section::Settings => "Configurações (Ctrl+,)",
         }
     }
@@ -61,6 +67,7 @@ impl Section {
             Section::Habits => crate::home::habits_page(ctx),
             Section::Focus => crate::focus::page(ctx),
             Section::Finance => crate::finance_page::page(ctx),
+            Section::Goals => crate::goals_page::page(ctx),
             Section::Settings => crate::settings::page(ctx),
         }
     }
